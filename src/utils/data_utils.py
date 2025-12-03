@@ -15,6 +15,7 @@ class CtxExample:
     text: str
     title: str
 
+
 @dataclass
 class QAExample:
     question: str
@@ -48,6 +49,7 @@ class CtxsRelevance:
             for idx in idxs:
                 mapping[idx] = label
         return mapping
+
 
 @dataclass
 class RelevanceQAExample(QAExample):

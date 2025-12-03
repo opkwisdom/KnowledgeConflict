@@ -6,3 +6,4 @@ data/
 **/*.pkl
 **/*.json
 **/*.jsonl
+**/*.db

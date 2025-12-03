@@ -10,6 +10,7 @@ import os
 
 from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
+from judge_model import LLMJudger, OpenAIJudger, HfLLMJudger, JudgeOutput
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
 from utils import setup_logger, load_config, load_relevance_dataset, check_answer, RelevanceQAExample
 
@@ -26,6 +27,7 @@ class InferenceResult:
 def run_inference(
     config: DictConfig,
     kfc: KnowledgeFusionCore,
+    llm_judger: LLMJudger,
     data: List[RelevanceQAExample],
     logger,
 ) -> Dict[str, List[InferenceResult]]:
@@ -33,13 +35,20 @@ def run_inference(
     results = {infer_case: [] for infer_case in inference_cases}
 
     for idx, item in tqdm(enumerate(data), desc="Running KFC Inference", total=len(data)):
-        # TODO: Generate real-time parametric answer
-        # question = item["question"]
-        # a_internal = kfc.model.generate(question)
+        question = item.question
+        a_internal = kfc.generate_internal_answer(question)
         
         a_internal = item.parametric_answer
+        judge_output: JudgeOutput = llm_judger.judge(
+            query=item.question,
+            answer=a_internal,
+            contexts=item.ctxs,
+        )
+        item.ctx_relevance = judge_output.ctx_relevance     # Real-time LLM judged relevance
         # is_correct = llm_check_answer(query, a_internal, item.ctxs)
-        is_correct = check_answer(a_internal, item.answers)     # Naive check
+        # is_correct = check_answer(a_internal, item.answers)     # Naive check
+
+        is_correct = judge_output.is_correct
         # Case 1 - Internal answer is correct
         if is_correct:
             sample_result = InferenceResult(
@@ -47,7 +56,7 @@ def run_inference(
                 question=item.question,
                 pred_answer=a_internal,
                 answers=item.answers,
-                is_correct=is_correct,
+                is_correct=check_answer(a_internal, item.answers),
             )
             results["param_true"].append(sample_result)
         # Case 2 - Internal answer is incorrect
@@ -69,6 +78,8 @@ def run_inference(
                 is_correct=check_answer(pred_answer, item.answers),
             )
             results[f"param_{rel_type}"].append(sample_result)
+    logger.info("Inference completed.")
+    logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
 
     return results
 
@@ -130,8 +141,9 @@ def main():
     kvzip = ModelKVzip(config.model.model_name, gen_kwargs=config.model.gen_kwargs, prompt=repeat_prompt)
     logger.info(f"Model {config.model.model_name} initialized.")
     kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, logger)
+    judger: LLMJudger = OpenAIJudger(config.judger) if config.judger.use_openai else HfLLMJudger(config.judger)
 
-    inference_result = run_inference(config, kfc, data, logger)
+    inference_result = run_inference(config, kfc, judger, data, logger)
     validate_and_save_results(inference_result, config.output_dir, logger)
 
 if __name__ == "__main__":

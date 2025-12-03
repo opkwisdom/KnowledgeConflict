@@ -15,8 +15,15 @@ model:
   prune:
     ratio: 0.3
 
+judger:
+  llm_model_name: gpt-4o-mini
+  prompt_name: base
+  cache_dir: src/cache_dir
+  use_cache: True
+  use_openai: True
+
 self_task_prompt_name: base
 generate_prompt_name: base
-output_dir: src/results/main
+output_dir: src/results/main/e2e_openai
 task: base
 experiment_name:

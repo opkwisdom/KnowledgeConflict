@@ -6,6 +6,7 @@ data:
 checker:
   llm_model_name: gpt-4o-mini
   prompt_name: base
+  cache_dir: 
   use_openai: True
 
 output_dir: src/results/checker_test

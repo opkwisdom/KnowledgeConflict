@@ -2,11 +2,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from typing import List
 
-from .llm_checker import LLMChecker, JudgeOutput, CtxsRelevance
+from .llm_judger import LLMJudger, JudgeOutput, CtxsRelevance
 
-class HfLLMChecker(LLMChecker):
+class HfLLMJudger(LLMJudger):
     """
-    HuggingFace LLM Checker implementation
+    HuggingFace LLM Judger implementation
     """
     def __init__(self, llm_model_name: str):
         super().__init__(llm_model_name)

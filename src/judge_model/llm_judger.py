@@ -4,12 +4,25 @@ from typing import List, Dict, Any, Optional, Union
 import os
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
+from omegaconf import DictConfig
 
 @dataclass
 class CtxsRelevance(BaseModel):
     positive: List[int] = Field(..., description="List of 0-based indices for positive contexts")
     negative: List[int] = Field(..., description="List of 0-based indices for negative contexts")
     irrelevant: List[int] = Field(..., description="List of 0-based indices for irrelevant contexts")
+
+    @property
+    def mapping(self) -> Dict[int, str]:
+        mapping = {}
+        for label, idxs in [
+            ("positive", self.positive),
+            ("negative", self.negative),
+            ("irrelevant", self.irrelevant),
+        ]:
+            for idx in idxs:
+                mapping[idx] = label
+        return mapping
 
 @dataclass
 class JudgeOutput(BaseModel):
@@ -19,12 +32,12 @@ class JudgeOutput(BaseModel):
 
 
 
-class LLMChecker(ABC):
+class LLMJudger(ABC):
     """
-    Abstract base class for LLM checkers
+    Abstract base class for LLM judgers
     """
-    def __init__(self, llm_model_name: str):
-        self.llm_model_name = llm_model_name
+    def __init__(self, config: DictConfig):
+        self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._init_llm()
 

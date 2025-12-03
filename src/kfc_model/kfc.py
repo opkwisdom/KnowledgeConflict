@@ -108,7 +108,11 @@ class KnowledgeFusionCore:
 
         for ctx_idx, ctx_ex in enumerate(contexts):
             context = f"Title: {ctx_ex.title}\n\n{ctx_ex.text}"
-            relevance = relevance_map[ctx_idx]
+            try:
+                relevance = relevance_map[ctx_idx]
+            except KeyError:
+                self.logger.error(f"Context index {ctx_idx} not found in relevance map.")
+                relevance = "irrelevant"
 
             # Case 2a - Context is relevant
             if relevance == "positive":
@@ -195,3 +199,20 @@ class KnowledgeFusionCore:
         generated_text = self._kvzip.decode(gen_ids)
         
         return generated_text, final_rel_type
+    
+    @torch.inference_mode()
+    def generate_internal_answer(
+        self,
+        query: Union[str, torch.Tensor],
+    ) -> str:
+        # Construct input_ids with prompt template
+        input_text = self.generate_prompt.format(question=query)
+        input_ids = self._kvzip.apply_template(input_text)
+        input_ids = torch.cat([self._kvzip.sys_prompt_ids, input_ids], dim=1)
+        input_ids = input_ids.to(self.device)
+
+        output = self.model.generate(input_ids, **self._kvzip.gen_kwargs)
+        gen_ids = output[:, len(input_ids[0]):-1]
+        generated_text = self._kvzip.decode(gen_ids)
+
+        return generated_text
