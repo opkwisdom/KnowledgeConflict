@@ -194,7 +194,6 @@ def main():
     logger.info(f"Model {config.model.model_name} initialized.")
 
     # Inference
-    # TODO: implement run_original_inference for QA performance comparison
     if config.run_baseline:
         inference_results = run_baseline_inference(config, model, tokenizer, data, logger)
     else:

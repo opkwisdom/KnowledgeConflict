@@ -21,6 +21,11 @@ GENERATE_PROMPT = {
         "Read the context carefully and answer the question based on it.\n\n"
         "Question: {question}\n\n"
         "Answer: "
+    ),
+    "pure-llm": (
+        "Answer the question based on your knowledge.\n\n"
+        "Question: {question}\n\n"
+        "Answer: "
     )
 }
 

@@ -1,0 +1,7 @@
+{
+    "rag_result": {
+        "total": 3610,
+        "correct": 1506,
+        "accuracy": 0.4172
+    }
+}
