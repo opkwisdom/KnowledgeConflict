@@ -1,0 +1,22 @@
+data:
+  data_path: "experiments/hypo_test/pseudo-passage-base_raw/kv_cache_hypothesis_test_results.pkl"
+  max_seq_length: 1024
+
+
+model:
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+  batch_size: 8
+  prune:
+    ratio: 0.3
+
+prompt_name: pseudo-passage-base
+calc_type: raw
+output_dir: experiments/hypo_test_plot
+topk: 100
+use_log_scale: true

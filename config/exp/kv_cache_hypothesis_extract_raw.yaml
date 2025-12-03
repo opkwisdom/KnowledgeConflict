@@ -1,0 +1,21 @@
+data:
+  data_path: "data/nq/parametric_relevance_tagged/validation.json"
+  max_seq_length: 1024
+
+
+model:
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 256
+  batch_size: 8
+  prune:
+    ratio: 0.3
+
+prompt_name: pseudo-passage-base
+output_dir: experiments/hypo_test
+task: pseudo-passage
+topk: 100

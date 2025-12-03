@@ -1,0 +1,8 @@
+# Data files
+data/
+**/*.log
+**/__pycache__
+**/*.png
+**/*.pkl
+**/*.json
+**/*.jsonl

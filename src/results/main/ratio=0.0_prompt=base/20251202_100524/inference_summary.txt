@@ -1,0 +1,27 @@
+{
+    "param_true": {
+        "total": 1872,
+        "correct": 1872,
+        "accuracy": 1.0
+    },
+    "param_positive": {
+        "total": 593,
+        "correct": 56,
+        "accuracy": 0.0944
+    },
+    "param_negative": {
+        "total": 755,
+        "correct": 40,
+        "accuracy": 0.053
+    },
+    "param_irrelevant": {
+        "total": 390,
+        "correct": 21,
+        "accuracy": 0.0538
+    },
+    "param_multiple": {
+        "total": 0,
+        "correct": 0,
+        "accuracy": 0.0
+    }
+}

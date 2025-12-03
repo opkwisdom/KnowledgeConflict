@@ -1,0 +1,12 @@
+data:
+  data_path: data/nq/parametric_relevance_tagged/validation.json
+  max_seq_length: 1024
+  use_single_context: True
+
+checker:
+  llm_model_name: gpt-4o-mini
+  prompt_name: base
+  use_openai: True
+
+output_dir: src/results/checker_test
+experiment_name: 

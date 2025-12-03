@@ -1,0 +1,1 @@
+LLAMA_CRITICAL_INDICES = ["8", "31"]
