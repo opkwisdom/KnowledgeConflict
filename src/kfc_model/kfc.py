@@ -9,17 +9,24 @@ from transformers import (
 
 from KVzip.model import ModelKVzip
 from KVzip.attention import RetainCache, EvictCache
-from utils import CtxExample, CtxsRelevance
+from utils import CtxExample, CtxsRelevance, template
 from .conflict_resources import *
 
 class KnowledgeFusionCore:
-    def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, logger: logging.Logger) -> None:
+    def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
         self.config: DictConfig = config
         self._kvzip: ModelKVzip = kvzip
         self.generate_prompt: str = generate_prompt
+        self.base_prompt: str = base_prompt
         self.logger: logging.Logger = logger
+        self.model_name: str = config.model.model_name
         self.__post_init__()
     
+    def set_base_chat_template(self, task: str = "qa"):
+        # Use base template for internal answer generation
+        prefix, postfix = template(self.model_name, task, base_template=True)
+        self.sys_prompt_ids, self.postfix_ids = self._kvzip.encode(prefix), self._kvzip.encode(postfix)
+
     def _parse_critical_indices(self, critical_indices: Optional[List[str]]
         ) -> Tuple[Dict[int, List[int]], Dict[int, List[int]]]:
         NUM_HEADS = getattr(self.model.config, "num_key_value_heads", None)
@@ -62,6 +69,8 @@ class KnowledgeFusionCore:
         else:
             self.critical_map, self.normal_map = {}, {}
             self.logger.warning("No critical indices found for the model.")
+        
+        self.set_base_chat_template()
 
     # For user convenience access
     @property
@@ -206,9 +215,9 @@ class KnowledgeFusionCore:
         query: Union[str, torch.Tensor],
     ) -> str:
         # Construct input_ids with prompt template
-        input_text = self.generate_prompt.format(question=query)
+        input_text = self.base_prompt.format(question=query)
         input_ids = self._kvzip.apply_template(input_text)
-        input_ids = torch.cat([self._kvzip.sys_prompt_ids, input_ids], dim=1)
+        input_ids = torch.cat([self.sys_prompt_ids, input_ids], dim=1)
         input_ids = input_ids.to(self.device)
 
         output = self.model.generate(input_ids, **self._kvzip.gen_kwargs)

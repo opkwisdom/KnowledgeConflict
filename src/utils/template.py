@@ -1,4 +1,4 @@
-def template(model_name, task="qa"):
+def template(model_name, task="qa", base_template=False):
     model_name = model_name.lower()
 
     if "llama" in model_name or model_name == "duo":
@@ -28,6 +28,9 @@ def template(model_name, task="qa"):
         prefix = "<|begin_of_text|>"
         postfix = "\n\nAnswer: "
 
+    if base_template:
+        return prefix, postfix
+
     if task.startswith("gsm"):
         prefix += "Given the context, answer to the following reasoning question.\n\n"
     else:
@@ -35,8 +38,8 @@ def template(model_name, task="qa"):
 
     return prefix, postfix
 
-def apply_template(query, context, model_name, task="qa"):
-    prefix, postfix = template(model_name, task=task)
+def apply_template(query, context, model_name, task="qa", base_template=False):
+    prefix, postfix = template(model_name, task=task, base_template=base_template)
     query = f"\n\n{query.strip()}"
     if context is not None:
         query = f"{context.strip()}\n\n{query}"

@@ -1,4 +1,4 @@
-def template(model_name, task):
+def template(model_name, task, base_template=False):
     model_name = model_name.lower()
 
     if "llama" in model_name or model_name == "duo":
@@ -28,12 +28,17 @@ def template(model_name, task):
         prefix = "<|begin_of_text|>"
         postfix = "\n\nAnswer: "
 
+    if base_template:
+        return prefix, postfix
+
     if task.startswith("gsm"):
         prefix += "Given the context, answer to the following reasoning question.\n\n"
     else:
         prefix += "Given the context, answer to the following question or request without explanation.\n\n"
 
     return prefix, postfix
+
+
 
 
 if __name__ == "__main__":

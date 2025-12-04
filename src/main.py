@@ -131,6 +131,8 @@ def main():
         pair_prompt = PSEUDO_PASSAGE_PROMPT[config.self_task_prompt_name]
         # generate_prompt = pair_prompt["generate"]
         repeat_prompt = pair_prompt["repeat"]
+    
+    base_prompt = GENERATE_PROMPT["pure-llm"]
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     # Load data
@@ -140,7 +142,7 @@ def main():
     # Initialize model
     kvzip = ModelKVzip(config.model.model_name, gen_kwargs=config.model.gen_kwargs, prompt=repeat_prompt)
     logger.info(f"Model {config.model.model_name} initialized.")
-    kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, logger)
+    kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, base_prompt, logger)
     judger: LLMJudger = OpenAIJudger(config.judger) if config.judger.use_openai else HfLLMJudger(config.judger)
 
     inference_result = run_inference(config, kfc, judger, data, logger)

@@ -1,0 +1,7 @@
+{
+    "pure_result": {
+        "total": 3610,
+        "correct": 1372,
+        "accuracy": 0.3801
+    }
+}

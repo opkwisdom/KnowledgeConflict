@@ -22,6 +22,11 @@ class CtxsRelevance(BaseModel):
         ]:
             for idx in idxs:
                 mapping[idx] = label
+        
+        total_len = len(self.positive) + len(self.negative) + len(self.irrelevant)
+        for i in range(total_len):
+            if i not in mapping:
+                mapping[i] = "irrelevant"
         return mapping
 
 @dataclass

@@ -35,7 +35,7 @@ class OpenAIJudger(LLMJudger):
             self._init_db()
 
     def _init_llm(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = OpenAI(api_key=os.getenv("JUNHO_OPENAI_API_KEY"))
 
     def _init_db(self):
         with sqlite3.connect(self.cache_path) as conn:
@@ -72,6 +72,7 @@ class OpenAIJudger(LLMJudger):
             formatted_contexts=formatted_ctx,
             last_index=len(contexts)-1
         )
+        import pdb; pdb.set_trace()
         # Check cache
         cache_key = self._get_cache_key(user_content)
         if self.use_cache:
@@ -83,7 +84,7 @@ class OpenAIJudger(LLMJudger):
                     data = json.loads(row[0])
                     cached_obj = JudgeOutput.model_validate(data)
                     return cached_obj
-        
+        print("Cache miss. Querying OpenAI API...")
         try:
             completion = self.client.beta.chat.completions.parse(
                 model=self.llm_model_name,
