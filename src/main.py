@@ -12,7 +12,10 @@ from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
 from judge_model import LLMJudger, OpenAIJudger, HfLLMJudger, JudgeOutput
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
-from utils import setup_logger, load_config, load_relevance_dataset, compute_metrics, MetricResult, RelevanceQAExample
+from utils import (
+    setup_logger, load_config, load_relevance_dataset, compute_metrics,
+    MetricResult, RelevanceQAExample
+)
 
 
 @dataclass
@@ -94,13 +97,22 @@ def validate_and_save_results(
 
     for k, inference_list in results.items():
         total = len(inference_list)
-        correct = sum([1 for res in inference_list if res.is_correct])
+
+        correct = sum([1 for res in inference_list if res.metrics.soft_em])
+        recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
+        precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
+        f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
+
         accuracy = correct / total if total > 0 else 0.0
-        logger.info(f"Case {k}: Total={total}, Correct={correct}, Accuracy={accuracy:.4f}")
+        logger.info(f"Case {k}: Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
+                    f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
         summary[k] = {
             "total": total,
             "correct": correct,
             "accuracy": round(accuracy, 4),
+            "recall": round(recall, 4),
+            "precision": round(precision, 4),
+            "f1": round(f1, 4),
         }
     
     with open(summary_path, 'w') as f:
@@ -143,7 +155,12 @@ def main():
     kvzip = ModelKVzip(config.model.model_name, gen_kwargs=config.model.gen_kwargs, prompt=repeat_prompt)
     logger.info(f"Model {config.model.model_name} initialized.")
     kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, base_prompt, logger)
-    judger: LLMJudger = OpenAIJudger(config.judger) if config.judger.use_openai else HfLLMJudger(config.judger)
+    logger.info("Knowledge Fusion Core initialized.")
+
+    if config.judger.use_openai:
+        judger: LLMJudger = OpenAIJudger(config.judger)
+    else:
+        judger: LLMJudger = HfLLMJudger(config.judger)
 
     inference_result = run_inference(config, kfc, judger, data, logger)
     validate_and_save_results(inference_result, config.output_dir, logger)

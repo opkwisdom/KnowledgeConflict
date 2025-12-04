@@ -31,7 +31,7 @@ class CtxsRelevance(BaseModel):
 
 @dataclass
 class JudgeOutput(BaseModel):
-    reasoning: str = Field(..., description="The reasoning provided by the LLM for its judgment")
+    # reasoning: str = Field(..., description="The reasoning provided by the LLM for its judgment")
     is_correct: bool = Field(..., description="Whether the answer is judged correct or not")
     ctx_relevance: CtxsRelevance = Field(..., description="Contextual relevance information")
 

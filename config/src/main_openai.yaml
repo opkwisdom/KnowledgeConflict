@@ -3,7 +3,6 @@ data:
   max_seq_length: 1024
   use_single_context: True
 
-
 model:
   model_name: meta-llama/Llama-3.1-8B-Instruct
   gen_kwargs:

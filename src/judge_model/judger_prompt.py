@@ -1,3 +1,5 @@
+from .template import apply_template
+
 OPENAI = {
     "base": {
         "system": (
@@ -26,6 +28,38 @@ OPENAI = {
             "### Contexts\n"
             "{formatted_contexts}\n\n"
             "Provide the output strictly using the provided JSON schema."
+        )
+    }
+}
+
+
+HUGGINGFACE = {
+    "base": {
+        # template.py가 "You are a helpful assistant." 뒤에 붙일 내용
+        "system": (
+            "You are an extremely strict evaluator for a RAG system. "
+            "Your goal is to evaluate context relevance and answer correctness based on strict guidelines."
+        ),
+        
+        # apply_template의 'query' 인자로 들어갈 내용
+        "user": (
+            "### Task Description\n"
+            "1. **Reasoning**: Explain your logic briefly.\n"
+            "2. **Analyze Contexts**: Classify EVERY context (from [0] to [{last_index}]) into one of three categories based on these rules"
+            "DO NOT skip any context:\n\n"
+            "   - **Positive**: Contains specific, literal evidence for the answer. No deduction allowed.\n"
+            "   - **Negative**: Topic/keywords match but FAILS to answer (Hard Negative/Distractor).\n"
+            "   - **Irrelevant**: Off-topic or unrelated.\n"
+            "3. **Determine Correctness**: Check if the Internal Answer provides a factually correct response to the Query.\n\n"
+
+            "### Input Data\n"
+            "- Query: {query}\n"
+            "- Internal Answer: {internal_answer}\n\n"
+            
+            "### Contexts\n"
+            "{formatted_contexts}\n\n"
+            
+            "Analyze the data and provide the structured evaluation."
         )
     }
 }

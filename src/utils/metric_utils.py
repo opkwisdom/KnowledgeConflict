@@ -1,5 +1,6 @@
 import re
 import string
+import regex
 from collections import Counter
 from typing import List
 from dataclasses import dataclass
@@ -10,6 +11,29 @@ class MetricResult:
     recall: float
     precision: float
     f1: float
+
+
+class SimpleTokenizer(object):
+    ALPHA_NUM = r'[\p{L}\p{N}\p{M}]+'
+    NON_WS = r'[^\p{Z}\p{C}]'
+
+    def __init__(self):
+        """
+        Args:
+            annotators: None or empty set (only tokenizes).
+        """
+        self._regexp = regex.compile(
+            '(%s)|(%s)' % (self.ALPHA_NUM, self.NON_WS),
+            flags=regex.IGNORECASE + regex.UNICODE + regex.MULTILINE
+        )
+
+    def tokenize(self, text, uncased=False):
+        matches = [m for m in self._regexp.finditer(text)]
+        if uncased:
+            tokens = [m.group().lower() for m in matches]
+        else:
+            tokens = [m.group() for m in matches]
+        return tokens
 
 
 def normalize_answer(s):
@@ -48,9 +72,24 @@ def normalize_answer(s):
 
     return replace_num(white_space_fix(remove_articles(remove_punc(lower(s)))))
 
-def check_answer(a_pred: str, a_true: List[str]) -> bool:
-    """Simple grading function to compare predicted and true answers."""
-    return any(normalize_answer(ans) in normalize_answer(a_pred) for ans in a_true)
+
+def has_answer(a_pred: str, a_true: List[str], tokenizer=SimpleTokenizer()) -> bool:
+    """Check if a document contains an answer string."""
+    a_pred = normalize_answer(a_pred)
+    pred_tokens = tokenizer.tokenize(a_pred, uncased=True)
+
+    for ans in a_true:
+        ans = normalize_answer(ans)
+        ans = tokenizer.tokenize(ans, uncased=True)
+        for i in range(0, len(pred_tokens) - len(ans) + 1):
+            if ans == pred_tokens[i: i + len(ans)]:
+                return True
+    return False
+
+
+# def check_answer(a_pred: str, a_true: List[str]) -> bool:
+#     """Simple grading function to compare predicted and true answers."""
+#     return any(normalize_answer(ans) in normalize_answer(a_pred) for ans in a_true)
 
 def recall(a_pred: str, a_true: List[str]) -> float:
     """Compute recall of predicted answer against true answers."""
@@ -99,7 +138,7 @@ def f1_score(a_pred: str, a_true: List[str]) -> float:
 ### Return all metrics
 def compute_metrics(a_pred: str, a_true: List[str]) -> MetricResult:
     """Compute all metrics: soft EM, recall, precision, F1."""
-    soft_em = any(normalize_answer(ans) in normalize_answer(a_pred) for ans in a_true)
+    soft_em = has_answer(a_pred, a_true)
     rec = recall(a_pred, a_true)
     prec = precision(a_pred, a_true)
     f1 = f1_score(a_pred, a_true)
@@ -120,4 +159,4 @@ if __name__ == "__main__":
     precision_score = precision(pred, trues)
     f1 = f1_score(pred, trues)
     import pdb; pdb.set_trace()
-    print(check_answer(pred, trues))  # Should return True
+    print(has_answer(pred, trues))  # Should return True

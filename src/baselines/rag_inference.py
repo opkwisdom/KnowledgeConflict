@@ -11,7 +11,7 @@ import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, check_answer, compute_metrics, MetricResult,
+    load_config, setup_logger, load_relevance_dataset, has_answer, compute_metrics, MetricResult,
     apply_template,
     RelevanceQAExample, CtxExample,
     InferenceResult,
@@ -153,13 +153,22 @@ def validate_and_save_results(
 
     for k, inference_list in results.items():
         total = len(inference_list)
-        correct = sum([1 for res in inference_list if res.is_correct])
+        
+        correct = sum([1 for res in inference_list if res.metrics.soft_em])
+        recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
+        precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
+        f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
+
         accuracy = correct / total if total > 0 else 0.0
-        logger.info(f"Case {k}: Total={total}, Correct={correct}, Accuracy={accuracy:.4f}")
+        logger.info(f"Case {k}: Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
+                    f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
         summary[k] = {
             "total": total,
             "correct": correct,
             "accuracy": round(accuracy, 4),
+            "recall": round(recall, 4),
+            "precision": round(precision, 4),
+            "f1": round(f1, 4),
         }
     
     with open(summary_path, 'w') as f:

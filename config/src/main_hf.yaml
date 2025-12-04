@@ -11,9 +11,18 @@ model:
     top_p: 1
     top_k: null
     max_new_tokens: 256
+  prune:
+    ratio: 0.3
 
-generate_prompt_name: pure-llm-brief
-output_dir: src/results/pure
+judger:
+  llm_model_name: meta-llama/Llama-3.1-8B-Instruct
+  prompt_name: base
+  cache_dir: src/cache_dir
+  use_cache: True
+  use_openai: False
+
+self_task_prompt_name: base
+generate_prompt_name: base
+output_dir: src/results/main/e2e_llama-3.1
 task: base
-run_baseline: True
 experiment_name:

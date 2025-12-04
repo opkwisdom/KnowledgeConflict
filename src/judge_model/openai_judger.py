@@ -72,7 +72,6 @@ class OpenAIJudger(LLMJudger):
             formatted_contexts=formatted_ctx,
             last_index=len(contexts)-1
         )
-        import pdb; pdb.set_trace()
         # Check cache
         cache_key = self._get_cache_key(user_content)
         if self.use_cache:
@@ -84,7 +83,6 @@ class OpenAIJudger(LLMJudger):
                     data = json.loads(row[0])
                     cached_obj = JudgeOutput.model_validate(data)
                     return cached_obj
-        print("Cache miss. Querying OpenAI API...")
         try:
             completion = self.client.beta.chat.completions.parse(
                 model=self.llm_model_name,

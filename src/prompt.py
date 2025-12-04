@@ -26,6 +26,12 @@ GENERATE_PROMPT = {
         "Answer the question based on your knowledge.\n\n"
         "Question: {question}\n\n"
         "Answer: "
+    ),
+    "pure-llm-brief": (
+        "Answer the question based on your knowledge briefly. "
+        "Be concise and direct.\n\n"
+        "Question: {question}\n\n"
+        "Answer: "
     )
 }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 export PYTHONPATH=$PWD:$PYTHONPATH
 
 python3 src/baselines/pure_inference.py \
