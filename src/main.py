@@ -12,7 +12,7 @@ from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
 from judge_model import LLMJudger, OpenAIJudger, HfLLMJudger, JudgeOutput
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
-from utils import setup_logger, load_config, load_relevance_dataset, check_answer, RelevanceQAExample
+from utils import setup_logger, load_config, load_relevance_dataset, compute_metrics, MetricResult, RelevanceQAExample
 
 
 @dataclass
@@ -21,7 +21,7 @@ class InferenceResult:
     question: str
     pred_answer: str
     answers: List[str]
-    is_correct: bool
+    metrics: MetricResult
 
 
 def run_inference(
@@ -56,7 +56,7 @@ def run_inference(
                 question=item.question,
                 pred_answer=a_internal,
                 answers=item.answers,
-                is_correct=check_answer(a_internal, item.answers),
+                metrics=compute_metrics(a_internal, item.answers),
             )
             results["param_true"].append(sample_result)
         # Case 2 - Internal answer is incorrect
@@ -75,7 +75,7 @@ def run_inference(
                 question=item.question,
                 pred_answer=pred_answer,
                 answers=item.answers,
-                is_correct=check_answer(pred_answer, item.answers),
+                metrics=compute_metrics(pred_answer, item.answers),
             )
             results[f"param_{rel_type}"].append(sample_result)
     logger.info("Inference completed.")

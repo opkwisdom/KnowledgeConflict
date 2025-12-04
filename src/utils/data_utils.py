@@ -5,6 +5,8 @@ import os
 from tqdm import tqdm
 from datasets import load_dataset, DatasetDict
 
+from .metric_utils import MetricResult
+
 
 ### Base QA Example Dataclasses
 @dataclass
@@ -76,7 +78,7 @@ class InferenceResult:
     question: str
     pred_answer: str
     answers: List[str]
-    is_correct: bool
+    metrics: MetricResult
 
 
 

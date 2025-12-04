@@ -11,7 +11,7 @@ import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, check_answer,
+    load_config, setup_logger, load_relevance_dataset, check_answer, compute_metrics, MetricResult,
     apply_template,
     RelevanceQAExample, CtxExample,
     InferenceResult,
@@ -129,7 +129,7 @@ def run_baseline_inference(
         gen_ids = outputs[:, input_ids.shape[1]:-1]
         pred_answer = tokenizer.decode(gen_ids[0])
 
-        is_correct = check_answer(pred_answer, item.answers)
+        metrics = compute_metrics(pred_answer, item.answers)
         
         # Construct result
         sample_result = InferenceResult(
@@ -137,7 +137,7 @@ def run_baseline_inference(
             question=item.question,
             pred_answer=pred_answer,
             answers=item.answers,
-            is_correct=is_correct,
+            metrics=metrics,
         )
         results[f"rag_result"].append(sample_result)
     return results

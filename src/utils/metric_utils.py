@@ -2,6 +2,15 @@ import re
 import string
 from collections import Counter
 from typing import List
+from dataclasses import dataclass
+
+@dataclass
+class MetricResult:
+    soft_em: bool
+    recall: float
+    precision: float
+    f1: float
+
 
 def normalize_answer(s):
 
@@ -86,6 +95,21 @@ def f1_score(a_pred: str, a_true: List[str]) -> float:
         return 0.0
 
     return 2 * (prec * rec) / (prec + rec)
+
+### Return all metrics
+def compute_metrics(a_pred: str, a_true: List[str]) -> MetricResult:
+    """Compute all metrics: soft EM, recall, precision, F1."""
+    soft_em = any(normalize_answer(ans) in normalize_answer(a_pred) for ans in a_true)
+    rec = recall(a_pred, a_true)
+    prec = precision(a_pred, a_true)
+    f1 = f1_score(a_pred, a_true)
+
+    return MetricResult(
+        soft_em=soft_em,
+        recall=rec,
+        precision=prec,
+        f1=f1,
+    )
 
 if __name__ == "__main__":
     # Simple test
