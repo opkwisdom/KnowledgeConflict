@@ -82,7 +82,7 @@ def run_inference(
             )
             results[f"param_{rel_type}"].append(sample_result)
     logger.info("Inference completed.")
-    logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
+    # logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
 
     return results
 
@@ -144,7 +144,7 @@ def main():
         # generate_prompt = pair_prompt["generate"]
         repeat_prompt = pair_prompt["repeat"]
     
-    base_prompt = GENERATE_PROMPT["pure-llm"]
+    base_prompt = GENERATE_PROMPT["pure-llm-brief"]
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     # Load data

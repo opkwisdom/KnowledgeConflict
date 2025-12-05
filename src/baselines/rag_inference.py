@@ -65,7 +65,7 @@ def run_inference(
 
     for idx, item in tqdm(enumerate(data), desc="Running RAG Inference", total=len(data)):
         a_internal = item.parametric_answer
-        is_correct = check_answer(a_internal, item.answers)
+        # is_correct = has_answer(a_internal, item.answers)
         # Case 1 - Internal answer is correct
         if is_correct:
             sample_result = InferenceResult(
@@ -91,7 +91,7 @@ def run_inference(
         gen_ids = outputs[:, input_ids.shape[1]:-1]
         pred_answer = tokenizer.decode(gen_ids[0])
 
-        is_correct = check_answer(pred_answer, item.answers)
+        is_correct = has_answer(pred_answer, item.answers)
         
         # Construct result
         sample_result = InferenceResult(
