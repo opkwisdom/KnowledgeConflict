@@ -102,7 +102,6 @@ def run_baseline_inference(
     for idx, item in tqdm(enumerate(data), desc="Running Pure Inference", total=len(data)):
         query_text = generate_prompt.format(question=item.question)
         input_text = apply_template(query_text, None, config.model.model_name, base_template=True)
-
         input_ids = tokenizer.encode(input_text, return_tensors='pt').to(model.device)
         attention_mask = torch.ones_like(input_ids).to(model.device)
         outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
