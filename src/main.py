@@ -40,10 +40,10 @@ def run_inference(
     for idx, item in tqdm(enumerate(data), desc="Running KFC Inference", total=len(data)):
         question = item.question
         a_internal = kfc.generate_internal_answer(question)
+
         if idx == 0:
             logger.info(f"Sample Internal Answer: {a_internal}")
         
-        a_internal = item.parametric_answer
         judge_output: JudgeOutput = llm_judger.judge(
             query=item.question,
             answer=a_internal,
