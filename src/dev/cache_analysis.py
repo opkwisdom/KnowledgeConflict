@@ -1,16 +1,48 @@
 from omegaconf import DictConfig, OmegaConf
 from typing import List, Dict, Tuple, Union, Optional
 import os
+import logging
 
 from kfc_model import KnowledgeFusionCore
 from KVzip.model import ModelKVzip
+from judge_model import LLMJudger, HfLLMJudger, JudgeOutput
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
 from utils import (
-    setup_logger, load_config, load_relevance_dataset
+    setup_logger, load_config, load_relevance_dataset,
+    RelevanceQAExample
 )
+
+def analysis(
+    config: DictConfig,
+    kfc: KnowledgeFusionCore,
+    data: List[RelevanceQAExample],
+    logger: logging.Logger,
+):
+    for idx, item in enumerate(data):
+        logger.info(f"Processing item {idx+1}/{len(data)}")
+        
+        question = item.question
+        a_internal = kfc.generate_internal_answer(question)
+
+        kv, final_rel_type, all_kv = kfc.resolve_and_generate(
+            query=item.question,
+            contexts=item.ctxs,
+            internal_answer=a_internal,
+            relevance=item.ctx_relevance,
+            use_single_context=True,    # Temporary
+        )
+        
+        cache_info_output_file = os.path.join(
+            config.output_dir, f"cache_info_item_{idx}.json"
+        )
+        kv.export_cache_info(cache_info_output_file)
 
 def main():
     config = load_config()
+    cur_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    config.output_dir = os.path.join(config.output_dir, f"run_{cur_time}")
+    os.makedirs(config.output_dir, exist_ok=True)
+
     logger = setup_logger("cache_analysis", config.output_dir)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(config))
@@ -31,53 +63,4 @@ def main():
     kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, base_prompt, logger)
     logger.info("Knowledge Fusion Core initialized.")
 
-    for idx, item in enumerate(data):
-        logger.info(f"Processing item {idx+1}/{len(data)}")
-        context = item.ctxs
-        kv = kvzip.prefill(context, load_score=False, do_score=False)
-        logger.info(f"  KV cache size after prefill: {kv._mem()} GB")
-
-        ratio = config.prune.ratio
-        kv.prune(ratio=ratio)
-        logger.info(f"  KV cache size after pruning (ratio={ratio}): {kv._mem()} GB")
-
-queries = [
-    "What must max_num_tokens be a multiple of when creating a cache?",
-    "What bit ranges are allowed for keys and values in quantized cache layers?",
-    "Which C++/CUDA file handles the implementation of dequant_cache_paged?",
-]
-queries = [q + "\nAnswer without explanation." for q in queries]
-answers = [
-    "256",
-    "From 2 to 8 bits",
-    "exllamav3/exllamav3_ext/cache/q_cache.cu",
-]
-stamp(f"Before Prefill")
-
-kv = model.prefill(
-    context,
-    load_score=(args.mode == "kvzip_head"),
-    do_score=(args.mode in ["kvzip", "kvzip_head"]),
-)  # prefill KV cache + importance scoring
-stamp(f"KV cache size: {kv._mem()} GB. After Prefill")
-
-if args.mode in ["kvzip", "kvzip_head"]:
-    ratio = 0.3 if args.mode == "kvzip" else 0.6  # compression ratio (= 1 - eviction ratio)
-    kv.prune(ratio=ratio)
-    stamp(f"KV cache size: {kv._mem()} GB. After Compression (ratio={ratio})")
-
-print("-" * 100)
-for i, (q, a) in enumerate(zip(queries, answers)):
-    query_ids = model.apply_template(q)
-    output = model.generate(query_ids, kv=kv, update_cache=False)  # efficient inference
-    print(model.decode(query_ids), output, f"\n(Ground-truth: {a})")
-
-    num_tokens = query_ids.shape[1] + model.encode(output).shape[1] + 1  # eos token
-    stamp(f"After Generation", denominator=num_tokens)
-    print("-" * 100)
-
-    cache_info_output_file = f"cache_result/cache_info_{i}.json"
-    if not os.path.exists("cache_result"):
-        os.makedirs("cache_result", exist_ok=True)
-        kv.export_cache_info(cache_info_output_file)
-    
+    analysis(config, kfc, data, logger)

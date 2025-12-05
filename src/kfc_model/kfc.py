@@ -207,7 +207,7 @@ class KnowledgeFusionCore:
         gen_ids = output[:, len(input_ids[0]):-1]  # parse response
         generated_text = self._kvzip.decode(gen_ids)
         
-        return generated_text, final_rel_type
+        return generated_text, final_rel_type, all_kv
     
     @torch.inference_mode()
     def generate_internal_answer(
