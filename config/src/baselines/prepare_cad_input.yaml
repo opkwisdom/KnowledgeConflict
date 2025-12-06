@@ -1,0 +1,21 @@
+data:
+  data_path: data/nq/parametric_relevance_tagged/validation.json
+  max_seq_length: 1024
+  use_single_context: True
+
+model_name: meta-llama/Llama-3.1-8B-Instruct
+
+gen_kwargs:
+  do_sample: False
+  temperature: 1.0
+  top_p: 1
+  top_k: null
+  max_new_tokens: 32
+
+alpha_values:
+  - 0
+  - 1
+
+generate_prompt_name: base
+output_dir: src/baselines/context-aware-decoding/eval/nq_input
+experiment_name:

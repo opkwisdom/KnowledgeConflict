@@ -4,7 +4,7 @@ data:
   use_single_context: True
 
 model:
-  model_name: meta-llama/Llama-3.1-8B-Instruct
+  model_name: meta-llama/Meta-Llama-3-8B-Instruct
   gen_kwargs:
     do_sample: False
     temperature: 1.0
@@ -12,8 +12,8 @@ model:
     top_k: null
     max_new_tokens: 32
 
-generate_prompt_name: pure-llm-brief
-output_dir: src/results/pure
+generate_prompt_name: base
+output_dir: src/results/rag
 task: base
 run_baseline: True
 experiment_name:

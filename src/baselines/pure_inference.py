@@ -11,9 +11,9 @@ import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, compute_metrics, has_answer, MetricResult,
+    load_config, setup_logger, load_relevance_dataset, load_qa_dataset, compute_metrics, has_answer, MetricResult,
     apply_template,
-    RelevanceQAExample, CtxExample,
+    RelevanceQAExample, CtxExample, QAExample,
     InferenceResult,
 )
 
@@ -91,7 +91,7 @@ def run_baseline_inference(
     config: DictConfig,
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
-    data: List[RelevanceQAExample],
+    data: Union[List[RelevanceQAExample], List[QAExample]],
     logger,
 ) -> Dict[str, List[InferenceResult]]:
     logger.info("Starting RAG Baseline Inference...")
@@ -173,7 +173,12 @@ def main():
     logger.info(OmegaConf.to_yaml(config))
 
     # Load data
-    data = load_relevance_dataset(config.data.data_path)
+    if "nq" in config.data.data_path:
+        data = load_relevance_dataset(config.data.data_path)
+    else:
+        data = load_qa_dataset(config.data.data_path)
+    # data = data[:50]
+    
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model

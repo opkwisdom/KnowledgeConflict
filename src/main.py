@@ -146,7 +146,7 @@ def main():
         # generate_prompt = pair_prompt["generate"]
         repeat_prompt = pair_prompt["repeat"]
     
-    base_prompt = GENERATE_PROMPT["pure-llm-brief"]
+    base_prompt = GENERATE_PROMPT["pure-llm-brief-2"]
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     logger.info(f"Using base prompt: {base_prompt}")
