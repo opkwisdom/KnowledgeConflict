@@ -74,7 +74,7 @@ def run_inference(
                 internal_answer=a_internal,
                 use_single_context=True,    # Temporary
             )
-
+            
             sample_result = InferenceResult(
                 id=idx,
                 question=item.question,

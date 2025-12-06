@@ -6,6 +6,7 @@ from datetime import datetime
 
 from kfc_model import KnowledgeFusionCore
 from KVzip.model import ModelKVzip
+from KVzip.attention import EvictCache
 from judge_model import LLMJudger, HfLLMJudger, JudgeOutput
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
 from utils import (
@@ -32,12 +33,14 @@ def analysis(
             relevance=item.ctx_relevance,
             use_single_context=True,    # Temporary
         )
+
+        merged_kv = EvictCache.merge(all_kv)
         
-        for i in range(len(all_kv)):
-            cache_info_output_file = os.path.join(
-                config.output_dir, f"cache_info_item_{idx}_kv_{i}.json"
-            )
-            all_kv[i].export_cache_info(cache_info_output_file)
+        # for i in range(len(all_kv)):
+        #     cache_info_output_file = os.path.join(
+        #         config.output_dir, f"cache_info_item_{idx}_kv_{i}.json"
+        #     )
+        #     all_kv[i].export_cache_info(cache_info_output_file)
 
 def main():
     config = load_config()

@@ -231,12 +231,13 @@ class EvictCache(DynamicCache, KVScore):
             for i in range(len(self.raw_score)):
                 self.raw_score[i] = self.raw_score[i].to(device)
 
-    @staticmethod
-    def merge(caches: List['EvictCache']) -> 'EvictCache':
+    @classmethod
+    def merge(cls, caches: List['EvictCache']) -> 'EvictCache':
         """
         Merge multiple EvictCache instances into a single EvictCache.
         """
-        raise NotImplementedError
+        import pdb; pdb.set_trace()
+        x=1
     
     def export_cache_info(self, output_file: str):
         output = {
