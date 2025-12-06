@@ -14,5 +14,15 @@ model:
   prune:
     ratio: 0.3
 
-output_dir: src/results/checker_test
+judger:
+  llm_model_name: meta-llama/Llama-3.1-8B-Instruct
+  prompt_name: base
+  cache_dir: src/cache_dir
+  use_cache: True
+  use_openai: False
+
+self_task_prompt_name: base
+generate_prompt_name: base
+output_dir: src/results/cache_analysis
 experiment_name: 
+task: base

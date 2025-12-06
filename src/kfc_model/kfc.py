@@ -163,7 +163,7 @@ class KnowledgeFusionCore:
         relevance: CtxsRelevance,
         internal_answer: str,
         use_single_context: bool = True,
-    ) -> Tuple[str, str]:
+    ) -> Tuple[str, str, List[EvictCache]]:
         # input query & internal answer
         q_ids = self._kvzip.encode(query) if isinstance(query, str) else query
         a_ids = self._kvzip.encode(internal_answer) if isinstance(internal_answer, str) else internal_answer

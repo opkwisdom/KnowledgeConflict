@@ -3,6 +3,7 @@
 # Licensed under The MIT License
 # GitHub Repository: https://github.com/snu-mllab/KVzip
 # ------------------------------------------------------------------------------
+import json
 import torch
 from transformers import DynamicCache, HybridCache
 from attention.score import KVScore, HybridKVScore
@@ -236,6 +237,28 @@ class EvictCache(DynamicCache, KVScore):
         Merge multiple EvictCache instances into a single EvictCache.
         """
         raise NotImplementedError
+    
+    def export_cache_info(self, output_file: str):
+        output = {
+            "start_idx": self.start_idx,
+            "end_idx": self.end_idx,
+            "ctx_len": self.ctx_len,
+            "flatten": self.info["flatten"],
+            "cu_head": self.info["cu_head"].cpu().tolist(),
+            "full_len": self.info["full_len"],
+            "layer_meta_data": {
+                layer_idx: {
+                    "len_k": self.info["len_k"][layer_idx].cpu().tolist(),
+                    "max_len_k": self.info["max_len_k"][layer_idx].item(),
+                    "cu_len_k": self.info["cu_len_k"][layer_idx].cpu().tolist(),
+                    "offset": self.info["offset"][layer_idx],
+                }
+                for layer_idx in range(self.n_layers)
+            }
+        }
+
+        with open(output_file, 'w') as f:
+            json.dump(output, f, ensure_ascii=False, indent=4)
 
 
 class RetainCache(DynamicCache, KVScore):
