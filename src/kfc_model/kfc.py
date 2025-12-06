@@ -198,13 +198,17 @@ class KnowledgeFusionCore:
         kv = self._kvzip._init_kv(kv=merged_kv)
         seen_token_prev = kv._seen_tokens
 
+        if kv is None:  # Irrelevant case
+            generated_text = internal_answer
+            return generated_text, final_rel_type
+
         # Generate
         # To generate correctly, need to apply template
         input_text = self.generate_prompt.format(question=query)
         input_ids = self._kvzip.apply_template(input_text)
         input_ids = input_ids.to(self.device)
 
-        if kv is not None and kv.prefill_ids is not None:  # prefill_ids has already involved system prompt
+        if kv.prefill_ids is not None:  # prefill_ids has already involved system prompt
             input_ids = torch.cat([kv.prefill_ids, input_ids], dim=1)
         output = self.model.generate(input_ids, past_key_values=kv, **self._kvzip.gen_kwargs)
         gen_ids = output[:, len(input_ids[0]):-1]  # parse response
