@@ -127,13 +127,13 @@ class EvictCache(DynamicCache, KVScore):
         mem *= 2  # key + value
         return round(mem / 10**9, 1)
 
-    def prune(self, ratio: float, level="pair", prune_kwargs: Optional[Dict[int, List[int]]] = None):
+    def prune(self, ratio: float, level="pair", prune_kwargs: Optional[Dict[int, List[int]]] = None, prune_type: str = "positive"):
         """ Prune the KV cache 
         """
         if "uniform" in level:
             self.valid, thres = self._threshold_uniform(self.score, ratio)
         else:
-            self.valid, thres = self._threshold(self.score, ratio, prune_kwargs)
+            self.valid, thres = self._threshold(self.score, ratio, prune_kwargs, prune_type)
         assert self.valid.size(-1) == self.ctx_len
 
         rmv = (self.valid == False).float()  # evicted KV pairs

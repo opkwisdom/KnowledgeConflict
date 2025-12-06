@@ -32,6 +32,13 @@ GENERATE_PROMPT = {
         "Be concise and direct.\n\n"
         "Question: {question}\n\n"
         "Answer: "
+    ),
+    "pure-llm-brief-2": (
+        "Answer the question based on your knowledge briefly. "
+        "Output only the answer entity or phrase. "
+        "Do not use complete sentences.\n\n"
+        "Question: {question}\n\n"
+        "Answer: "
     )
 }
 

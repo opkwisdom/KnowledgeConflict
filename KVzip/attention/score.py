@@ -92,7 +92,7 @@ class KVScore():
         attn_weights[..., -window_size:, -window_size:] += self.causal_mask_score
 
     ##################################################################################################
-    def _threshold(self, score: Union[torch.Tensor, List[torch.Tensor]], ratio: float, prune_kwargs: Optional[Dict[int, List[int]]] = None):
+    def _threshold(self, score: Union[torch.Tensor, List[torch.Tensor]], ratio: float, prune_kwargs: Optional[Dict[int, List[int]]] = None, prune_type: str = "positive"):
         """ 
         Apply thresholding to KV importance scores
         Prune Args can specify specific layers and heads to prune, e.g., ["5_1", "5_3", "6"]
@@ -120,9 +120,12 @@ class KVScore():
                     n = max(int(len(score_sort) * ratio) - 1, 0)
                     thres = score_sort[n].item()
 
-                    # Default: keep
+                    # Default: keep for positive, remove for negative
                     valids = torch.ones_like(layer_score, dtype=torch.bool)
-                    target_valids = (layer_score[:, target_heads] > thres).bool()
+                    if prune_type == "positive":
+                        target_valids = (layer_score[:, target_heads] > thres).bool()
+                    else:
+                        target_valids = (layer_score[:, target_heads] < thres).bool()
                     valids[:, target_heads] = target_valids
                 else:
                     valids = torch.ones_like(layer_score, dtype=bool)

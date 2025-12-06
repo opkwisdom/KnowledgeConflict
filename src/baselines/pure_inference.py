@@ -11,9 +11,9 @@ import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, compute_metrics, has_answer, MetricResult,
+    load_config, setup_logger, load_relevance_dataset, load_qa_dataset, compute_metrics, has_answer, MetricResult,
     apply_template,
-    RelevanceQAExample, CtxExample,
+    RelevanceQAExample, CtxExample, QAExample,
     InferenceResult,
 )
 
@@ -91,7 +91,7 @@ def run_baseline_inference(
     config: DictConfig,
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
-    data: List[RelevanceQAExample],
+    data: Union[List[RelevanceQAExample], List[QAExample]],
     logger,
 ) -> Dict[str, List[InferenceResult]]:
     logger.info("Starting RAG Baseline Inference...")
@@ -102,7 +102,6 @@ def run_baseline_inference(
     for idx, item in tqdm(enumerate(data), desc="Running Pure Inference", total=len(data)):
         query_text = generate_prompt.format(question=item.question)
         input_text = apply_template(query_text, None, config.model.model_name, base_template=True)
-
         input_ids = tokenizer.encode(input_text, return_tensors='pt').to(model.device)
         attention_mask = torch.ones_like(input_ids).to(model.device)
         outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
@@ -174,7 +173,12 @@ def main():
     logger.info(OmegaConf.to_yaml(config))
 
     # Load data
-    data = load_relevance_dataset(config.data.data_path)
+    if "nq" in config.data.data_path:
+        data = load_relevance_dataset(config.data.data_path)
+    else:
+        data = load_qa_dataset(config.data.data_path)
+    # data = data[:50]
+    
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model

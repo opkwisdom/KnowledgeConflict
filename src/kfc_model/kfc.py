@@ -132,7 +132,8 @@ class KnowledgeFusionCore:
                 )
                 kv.prune(
                     ratio=prune_ratio,
-                    prune_kwargs=self.normal_map
+                    prune_kwargs=self.normal_map,
+                    prune_type=relevance
                 )
                 evicted_kvs.append(kv)
             
@@ -146,12 +147,14 @@ class KnowledgeFusionCore:
                 )
                 kv.prune(
                     ratio=prune_ratio,
-                    prune_kwargs=self.critical_map
+                    prune_kwargs=self.critical_map,
+                    prune_type=relevance
                 )
                 evicted_kvs.append(kv)
             # Case 2c - Context is irrelevant
             else:
-                continue    # Skip
+                kv = None    # Skip
+                evicted_kvs.append(kv)
         
         return evicted_kvs
     
@@ -201,7 +204,7 @@ class KnowledgeFusionCore:
         input_ids = self._kvzip.apply_template(input_text)
         input_ids = input_ids.to(self.device)
 
-        if kv.prefill_ids is not None:  # prefill_ids has already involved system prompt
+        if kv is not None and kv.prefill_ids is not None:  # prefill_ids has already involved system prompt
             input_ids = torch.cat([kv.prefill_ids, input_ids], dim=1)
         output = self.model.generate(input_ids, past_key_values=kv, **self._kvzip.gen_kwargs)
         gen_ids = output[:, len(input_ids[0]):-1]  # parse response
