@@ -5,7 +5,7 @@ export PYTHONPATH=$PWD:$PYTHONPATH
 
 CONFIG_PATH=$1
 
-ratios=(0.1 0.5 0.7 0.9)
+ratios=(0.3)
 for ratio in "${ratios[@]}"
 do
     python3 src/main.py \

@@ -38,9 +38,10 @@ GENERATE_PROMPT = {
         "Output only the answer entity or phrase. "
         "Do not use complete sentences.\n\n"
         "Question: {question}\n\n"
-        "Answer: "
     )
 }
+
+# Answer: 제외
 
 ### Naive style
 # "generate": f"\n\nGenerate a pseudo-passage which is relevant to the Question.",

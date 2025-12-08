@@ -33,7 +33,8 @@ def load_pickled_results(file_path: str) -> dict:
     return data
 
 def plot_kv_cache_hypothesis(
-    candidate: ScoreRatio,
+    candidate_1: ScoreRatio,
+    candidate_2: ScoreRatio,
     baseline_1: ScoreRatio,
     baseline_2: ScoreRatio,
     title: str,
@@ -48,25 +49,28 @@ def plot_kv_cache_hypothesis(
     bar_width = bin_edges[1] - bin_edges[0]
 
     center_x_positions = bin_edges[:-1] + bar_width / 2
-    individual_bar_width = bar_width / 4
+    individual_bar_width = bar_width / 5
 
-    offset_left = -individual_bar_width
-    offset_right = individual_bar_width
+    offset_left = -2 * individual_bar_width
+    offset_right = 2 * individual_bar_width
 
-    sorted_keys = sorted(candidate.keys())
+    sorted_keys = sorted(candidate_1.keys())
 
     # Extract values
-    candidate_values = np.array([candidate[k] for k in sorted_keys])
+    candidate_1_values = np.array([candidate_1[k] for k in sorted_keys])
+    candidate_2_values = np.array([candidate_2[k] for k in sorted_keys])
     baseline_1_values = np.array([baseline_1[k] for k in sorted_keys])
     baseline_2_values = np.array([baseline_2[k] for k in sorted_keys])
 
     # Compute X positions
-    x_pos_cand = center_x_positions + offset_left
+    x_pos_cand1 = center_x_positions + offset_left
+    x_pos_cand2 = center_x_positions + offset_left + individual_bar_width
     x_pos_base1 = center_x_positions
-    x_pos_base2 = center_x_positions + offset_right
+    x_pos_base2 = center_x_positions + individual_bar_width
 
     # Plot bars
-    ax.bar(x_pos_cand, candidate_values, width=individual_bar_width, label=title, color='blue', alpha=0.8)
+    ax.bar(x_pos_cand1, candidate_1_values, width=individual_bar_width, label='false_neg', color='blue', alpha=0.8)
+    ax.bar(x_pos_cand2, candidate_2_values, width=individual_bar_width, label='false_rel', color='orange', alpha=0.8)
     ax.bar(x_pos_base1, baseline_1_values, width=individual_bar_width, label='true_irr', color='green', alpha=0.8)
     ax.bar(x_pos_base2, baseline_2_values, width=individual_bar_width, label='false_irr', color='red', alpha=0.8)
 
@@ -224,12 +228,16 @@ def main():
         baseline_1 = extract_kv_cache_score_ratio(data["true_irr"], logger)
         baseline_2 = extract_kv_cache_score_ratio(data["false_irr"], logger)
 
-        candidate_keys = ["true_rel", "false_rel", "true_neg", "false_neg"]
+        candidate_keys = [
+            ["true_neg", "true_rel"],
+            ["false_neg", "false_rel"]
+        ]
         for cand_key in candidate_keys:
-            candidate = extract_kv_cache_score_ratio(data[cand_key], logger)
-            output_path = os.path.join(config.output_dir, f"kv_cache_hypothesis_{cand_key}_plot.png")
-            title = f"KV Cache Hypothesis Test - {cand_key}"
-            plot_kv_cache_hypothesis(candidate, baseline_1, baseline_2, title, output_path)
+            candidate_1 = extract_kv_cache_score_ratio(data[cand_key[0]], logger)
+            candidate_2 = extract_kv_cache_score_ratio(data[cand_key[1]], logger)
+            output_path = os.path.join(config.output_dir, f"kv_cache_hypothesis_{cand_key[0]}_{cand_key[1]}_plot.png")
+            title = f"KV Cache Hypothesis Test - {cand_key[0]} & {cand_key[1]}"
+            plot_kv_cache_hypothesis(candidate_1, candidate_2, baseline_1, baseline_2, title, output_path)
     else:
         baseline_1 = torch.stack(
             [torch.tensor(item.kv_cache_score) for item in data["true_irr"]],

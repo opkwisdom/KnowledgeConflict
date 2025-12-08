@@ -141,7 +141,7 @@ class EvictCache(DynamicCache, KVScore):
         self.pruned = True
         # print(f"ratio {r_:.2f} ({level}), {self._mem()} GB (evict {rmv.sum():.0f} pairs)")
         return thres, r_
-
+        
     def _get_valid(self, layer_idx: int, n_seq: int):
         """ obtain full mask for the given keys (retain system prompt and queries)
         """
