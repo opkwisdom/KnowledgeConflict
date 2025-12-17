@@ -1,5 +1,6 @@
 # Data files
 data/
+index/
 **/*.log
 **/__pycache__
 **/*.png
@@ -8,3 +9,5 @@ data/
 **/*.jsonl
 **/*.db
 **/src/results
+**/*.html
+**/.env

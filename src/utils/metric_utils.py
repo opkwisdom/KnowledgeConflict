@@ -78,6 +78,9 @@ def has_answer(a_pred: str, a_true: List[str], tokenizer=SimpleTokenizer()) -> b
     a_pred = normalize_answer(a_pred)
     pred_tokens = tokenizer.tokenize(a_pred, uncased=True)
 
+    if isinstance(a_true, dict):
+        a_true = a_true["aliases"]  # TriviaQA
+
     for ans in a_true:
         ans = normalize_answer(ans)
         ans = tokenizer.tokenize(ans, uncased=True)

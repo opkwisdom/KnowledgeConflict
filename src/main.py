@@ -25,6 +25,8 @@ class InferenceResult:
     pred_answer: str
     answers: List[str]
     metrics: MetricResult
+    has_answer: str
+    ctx_class: str
 
 
 def run_inference(
@@ -37,6 +39,7 @@ def run_inference(
     inference_cases = ["param_true", "param_positive", "param_negative", "param_irrelevant", "param_multiple"]
     results = {infer_case: [] for infer_case in inference_cases}
 
+    data = data[:10]
     for idx, item in tqdm(enumerate(data), desc="Running KFC Inference", total=len(data)):
         question = item.question
         a_internal = kfc.generate_internal_answer(question)
@@ -47,7 +50,7 @@ def run_inference(
         judge_output: JudgeOutput = llm_judger.judge(
             query=item.question,
             answer=a_internal,
-            contexts=item.ctxs,
+            contexts=item.ctxs #single
         )
         item.ctx_relevance = judge_output.ctx_relevance     # Real-time LLM judged relevance
         # is_correct = llm_check_answer(query, a_internal, item.ctxs)
@@ -62,6 +65,8 @@ def run_inference(
                 pred_answer=a_internal,
                 answers=item.answers,
                 metrics=compute_metrics(a_internal, item.answers),
+                has_answer=item.ctxs[0].hasanswer,
+                ctx_class=judge_output.ctx_relevance
             )
             results["param_true"].append(sample_result)
         # Case 2 - Internal answer is incorrect
@@ -81,6 +86,8 @@ def run_inference(
                 pred_answer=pred_answer,
                 answers=item.answers,
                 metrics=compute_metrics(pred_answer, item.answers),
+                has_answer=item.ctxs[0].hasanswer,
+                ctx_class=judge_output.ctx_relevance
             )
             results[f"param_{rel_type}"].append(sample_result)
     logger.info("Inference completed.")
@@ -146,7 +153,10 @@ def main():
         # generate_prompt = pair_prompt["generate"]
         repeat_prompt = pair_prompt["repeat"]
     
-    base_prompt = GENERATE_PROMPT["pure-llm-brief-2"]
+    base_prompt = GENERATE_PROMPT["mj_prompt_v2"]
+    # base_prompt = GENERATE_PROMPT["pure-llm-brief-2"]
+
+
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     logger.info(f"Using base prompt: {base_prompt}")

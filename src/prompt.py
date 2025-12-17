@@ -38,7 +38,11 @@ GENERATE_PROMPT = {
         "Output only the answer entity or phrase. "
         "Do not use complete sentences.\n\n"
         "Question: {question}\n\n"
-    )
+    ),
+    "mj_prompt_v2": (
+        "Answer the Question\n\n"
+        "Question: {question}\n\n"
+    ),
 }
 
 # Answer: 제외
