@@ -1,0 +1,42 @@
+{
+    "param_true": {
+        "total": 68,
+        "correct": 42,
+        "accuracy": 0.6176,
+        "recall": 0.7012,
+        "precision": 0.548,
+        "f1": 0.5782
+    },
+    "param_positive": {
+        "total": 10,
+        "correct": 7,
+        "accuracy": 0.7,
+        "recall": 0.7333,
+        "precision": 0.6567,
+        "f1": 0.6357
+    },
+    "param_negative": {
+        "total": 8,
+        "correct": 3,
+        "accuracy": 0.375,
+        "recall": 0.4583,
+        "precision": 0.4583,
+        "f1": 0.4583
+    },
+    "param_irrelevant": {
+        "total": 14,
+        "correct": 3,
+        "accuracy": 0.2143,
+        "recall": 0.2679,
+        "precision": 0.0267,
+        "f1": 0.048
+    },
+    "param_multiple": {
+        "total": 0,
+        "correct": 0,
+        "accuracy": 0.0,
+        "recall": 0.0,
+        "precision": 0.0,
+        "f1": 0.0
+    }
+}

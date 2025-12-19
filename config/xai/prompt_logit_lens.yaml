@@ -15,8 +15,8 @@ model:
   prune:
     ratio: 0.3
 
-prompt_name: base
-generate_prompt_name: base
+prompt_name: 
+generate_prompt_name: 
 output_dir: experiments/hypo_test
 task: base
 do_answer: True

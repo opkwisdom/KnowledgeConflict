@@ -11,8 +11,8 @@ from dataclasses import dataclass, asdict
 import pickle
 from tqdm import tqdm
 
-from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT
-from utils import load_config, load_json_data, setup_logger
+from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
+from utils import load_config, load_json_data, setup_logger, has_answer
 from KVzip.model import ModelKVzip
 from KVzip.attention.kvcache import RetainCache, EvictCache
 
@@ -30,17 +30,39 @@ class TestEx:
 
 BINS = 20
 
-def grade_answer(a_pred: str, a_true: List[str]) -> bool:
-    """Simple grading function to compare predicted and true answers."""
-    return any(ans.strip().lower() in a_pred.strip().lower() for ans in a_true)
 
 
-def detect_conflict_base(model: ModelKVzip, item: dict, ctx_idx: int, logger) -> Union[RetainCache, EvictCache]:
+def detect_conflict_base(
+    config: DictConfig,
+    model: ModelKVzip,
+    item: dict,
+    ctx_idx: int,
+    prompt: str,
+    logger
+) -> Union[RetainCache, EvictCache]:
     # Generate internal answer
-    # q_ids = model.apply_template(item['question'])
-    # a_internal = model.generate(q_ids)
-    a_internal = item["parametric_answer"]
-    is_correct = grade_answer(a_internal, item['answers'])
+    if config.do_answer:
+        user_content = prompt.format(question=item['question'])
+        messages = [
+            {"role": "user", "content": user_content}
+        ]
+        q_ids = model.tokenizer.apply_chat_template(
+            messages,
+            return_tensors="pt",
+            add_generation_prompt=True,
+        ).to(model.device)
+        inputs = {
+            "input_ids": q_ids,
+            "attention_mask": torch.ones_like(q_ids).to(model.device),
+        }
+        with torch.no_grad():
+            raw_ids = model.model.generate(**inputs, **model.gen_kwargs)
+        generated_ids = raw_ids[:, q_ids.shape[1]:]
+        a_internal = model.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+    else:
+        a_internal = item["parametric_answer"]
+    
+    is_correct = has_answer(a_internal, item['answers'])
     # logger.info(f"Internal Answer: {a_internal} (Correct: {is_correct})")
 
     # These two inputs are used for detecting conflict
@@ -74,13 +96,21 @@ def detect_conflict_base(model: ModelKVzip, item: dict, ctx_idx: int, logger) ->
     return bin_count_dict, a_internal, is_correct
 
 
-def detect_conflict_pseudo_passage(model: ModelKVzip, item: dict, ctx_idx: int, generate_prompt: str, logger) -> Union[RetainCache, EvictCache]:
+def detect_conflict_pseudo_passage(
+    config: DictConfig,
+    model: ModelKVzip,
+    item: dict,
+    ctx_idx: int,
+    prompt: str,
+    generate_prompt: str,
+    logger
+) -> Union[RetainCache, EvictCache]:
     # Generate pseudo-passage
     prompt = generate_prompt.format(question=item['question'])
     g_ids = model.apply_template(prompt)
     pseudo_passage_ids = model.model.generate(g_ids, **model.gen_kwargs)[:, g_ids.shape[1]:]
     pseudo_passage = model.tokenizer.decode(pseudo_passage_ids[0], skip_special_tokens=True)
-    is_correct = grade_answer(pseudo_passage, item['answers'])
+    is_correct = has_answer(pseudo_passage, item['answers'])
 
     # Detect conflict by repeated generation
     target_ctx = item['ctxs'][ctx_idx]
@@ -122,6 +152,7 @@ def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_di
         "false_irr": [],
     }
 
+    prompt = GENERATE_PROMPT[config.generate_prompt_name]
     # Select detection function
     detect_conflict_func = None
     if config.task == "base" or config.task is None:
@@ -145,9 +176,9 @@ def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_di
         # Positive context
         for pos_idx in pos_ids:
             if is_pseudo_passage:
-                pos_kv, a_internal, is_correct = detect_conflict_func(model, item, pos_idx, generate_prompt, logger)
+                pos_kv, a_internal, is_correct = detect_conflict_func(config, model, item, pos_idx, prompt, generate_prompt, logger)
             else:
-                pos_kv, a_internal, is_correct = detect_conflict_func(model, item, pos_idx, logger)
+                pos_kv, a_internal, is_correct = detect_conflict_func(config, model, item, pos_idx, prompt, logger)
             test_ex = TestEx(
                 id=i,
                 question=item['question'],
@@ -165,9 +196,9 @@ def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_di
         # Negative context
         for neg_idx in neg_ids:
             if is_pseudo_passage:
-                neg_kv, a_internal, is_correct = detect_conflict_func(model, item, neg_idx, generate_prompt, logger)
+                neg_kv, a_internal, is_correct = detect_conflict_func(config, model, item, neg_idx, prompt, generate_prompt, logger)
             else:
-                neg_kv, a_internal, is_correct = detect_conflict_func(model, item, neg_idx, logger)
+                neg_kv, a_internal, is_correct = detect_conflict_func(config, model, item, neg_idx, prompt, logger)
             test_ex = TestEx(
                 id=i,
                 question=item['question'],
@@ -185,9 +216,9 @@ def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_di
         # Irrelevant context
         for irr_idx in irr_ids:
             if is_pseudo_passage:
-                irr_kv, a_internal, is_correct = detect_conflict_func(model, item, irr_idx, generate_prompt, logger)
+                irr_kv, a_internal, is_correct = detect_conflict_func(config, model, item, irr_idx, prompt, generate_prompt, logger)
             else:
-                irr_kv, a_internal, is_correct = detect_conflict_func(model, item, irr_idx, logger)
+                irr_kv, a_internal, is_correct = detect_conflict_func(config, model, item, irr_idx, prompt, logger)
             test_ex = TestEx(
                 id=i,
                 question=item['question'],
