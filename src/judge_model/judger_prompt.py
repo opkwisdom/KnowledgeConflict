@@ -29,6 +29,78 @@ OPENAI = {
             "{formatted_contexts}\n\n"
             "Provide the output strictly using the provided JSON schema."
         )
+    },
+    "mj_prompt": {
+        "system": (
+            "You are an expert evaluator for a RAG system. "
+            "Your objective is to assess the relevance of retrieved passages and the factual accuracy of the answer."
+        ),
+        "user": (
+            "### Task Description\n"
+            "You must evaluate the provided 'Contexts' and the 'Internal Answer' based on the 'Query'.\n\n"
+
+            "### Step 1: Classify Context Relevance\n"
+            "Analyze EACH context (from [0] to [{last_index}]) and assign one of the following labels. "
+            "Be precise in distinguishing 'Negative' from 'Irrelevant'.\n\n"
+
+            "   - **Positive**: The context contains sufficient information to answer the query. "
+            "Direct evidence or strong clues allowing logical deduction are present.\n"
+            "   - **Negative** (Targeted Hard Negative): The context focuses on the EXACT SAME entity or event as the query "
+            "but FAILS to provide the specific answer (e.g., Query asks for 'release date', Context only gives 'director'). "
+            "If it just shares keywords but talks about a different sub-topic, mark it as Irrelevant.\n"
+            "   - **Irrelevant**: The context is about a different entity, a different time period, or is generally unrelated, "
+            "even if it shares some keywords.\n\n"
+
+            "### Step 2: Judge Answer Correctness\n"
+            "Determine if the 'Internal Answer' is factually correct based on the 'Query'.\n"
+            "   - **Ignore Style**: Even if the answer is verbose or grammatically imperfect, if it contains the correct core entity/fact, mark it as **True**.\n"
+            "   - **Fact Check**: If the core entity/number/date is wrong, mark it as **False**.\n\n"
+
+            "### Input Data\n"
+            "- Query: {query}\n"
+            "- Internal Answer: {internal_answer}\n\n"
+            "### Contexts\n"
+            "{formatted_contexts}\n\n"
+
+            "### Output Format\n"
+            "Return the result strictly in the following JSON format:\n"
+            "{{\n"
+            "  \"reasoning\": \"Briefly explain why contexts are Positive/Negative/Irrelevant and why the answer is Correct/Incorrect.\",\n"
+            "  \"ctx_relevance\": [\"Positive\", \"Irrelevant\", \"Negative\", ...],\n"
+            "  \"is_correct\": true\n"
+            "}}"
+        )
+    },
+    "single_context_eval": {
+        "system": (
+            "You are an expert RAG Evaluator. "
+            "You will be given a Query, a single Retrieved Context, and an Internal Answer. "
+            "Your task is to classify the context's relevance and verify the answer's correctness."
+        ),
+        "user": (
+            "### Task Description\n"
+            "1. **Classify Context**: Analyze the provided 'Retrieved Context' strictly based on the 'Query'.\n"
+            "   - **positive**: The context contains EXPLICIT information or strong clues to answer the query.\n"
+            "   - **negative** (Hard Negative): The context discusses the SAME entity/topic as the query but FAILS to provide the specific answer.\n"
+            "   - **irrelevant**: The context is about a different entity or completely unrelated.\n\n"
+
+            "2. **Verify Answer**: Determine if the 'Internal Answer' is factually correct based on the 'Query'.\n"
+            "   - Focus on the core entity/fact. Ignore verbosity or style issues.\n\n"
+
+            "### Input Data\n"
+            "- Query: {query}\n"
+            "- Internal Answer: {internal_answer}\n\n"
+            "### Retrieved Context\n"
+            "{formatted_contexts}\n\n"
+
+            "### Output Format\n"
+            "Provide the output in valid JSON format only.\n"
+            "{{\n"
+            "  \"reasoning\": \"Brief explanation...\",\n"
+            "  \"ctx_relevance\": [\"positive\"], \n" 
+            "  \"is_correct\": true\n"
+            "}}"
+        )
     }
 }
 
