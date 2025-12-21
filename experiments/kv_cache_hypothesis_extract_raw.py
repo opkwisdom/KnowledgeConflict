@@ -26,11 +26,9 @@ class TestEx:
     ctx_rel: str
     kv_cache_score: torch.Tensor
 
-
 def grade_answer(a_pred: str, a_true: List[str]) -> bool:
     """Simple grading function to compare predicted and true answers."""
     return any(ans.strip().lower() in a_pred.strip().lower() for ans in a_true)
-
 
 def detect_conflict_base(model: ModelKVzip, item: dict, ctx_idx: int, topk: int, logger
     ) -> Tuple[torch.Tensor, str, bool]:
@@ -66,7 +64,6 @@ def detect_conflict_base(model: ModelKVzip, item: dict, ctx_idx: int, topk: int,
         sample_topk_diff_scores[i] = topk_diff_scores
     
     return sample_topk_diff_scores, a_internal, is_correct
-
 
 def detect_conflict_pseudo_passage(model: ModelKVzip, item: dict, ctx_idx: int, generate_prompt: str, topk: int, logger
     ) -> Tuple[torch.Tensor, str, bool]:

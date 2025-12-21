@@ -43,7 +43,24 @@ GENERATE_PROMPT = {
         "Answer the Question\n\n"
         "Question: {question}\n\n"
     ),
+    "care_closed_book": (
+        "Answer the questions:\n"
+        "Question: {question}?\n"
+        "The answer is:"
+    ),
+    "priori_judgement": (
+        "Answer the following question based on your internal knowledge with one or few words.\n"
+        "Question: {question}\n"
+        "Answer: "
+    )
 }
+
+### Fact Checking Prompt Templates
+# task_type == 'fact_checking':
+#         return {
+#             True: "Refer to the background document and verify the following claims with \"True\" or \"False\":",
+#             False:"Verify the following claims with \"True\" or \"False\":"
+#         }[use_rag]
 
 # Answer: 제외
 

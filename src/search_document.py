@@ -161,7 +161,7 @@ def _worker_batch_search(gpu_idx: int, logger, searcher) -> List[QAExample]:
 
                 answers = sample.get("answer", None)
                 if answers is None:
-                    answers = sample.get("answers", [])  # WebQA
+                    answers = sample.get("answers", None)  # WebQA
                 if answers is None:
                     answers = sample.get("possible_answers", None)  # PopQA
                 if answers is None:

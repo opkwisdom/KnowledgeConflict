@@ -1,4 +1,5 @@
 data:
+  name: nq
   data_path: data/nq/parametric_relevance_tagged/validation.json
   max_seq_length: 1024
   use_single_context: True

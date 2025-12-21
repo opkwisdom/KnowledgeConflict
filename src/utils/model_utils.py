@@ -1,5 +1,6 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+from typing import Mapping
 
 def get_model_name(name: str):
     """ We support abbreviated model names such as:

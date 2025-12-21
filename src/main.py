@@ -38,8 +38,6 @@ def run_inference(
 ) -> Dict[str, List[InferenceResult]]:
     inference_cases = ["param_true", "param_positive", "param_negative", "param_irrelevant", "param_multiple"]
     results = {infer_case: [] for infer_case in inference_cases}
-
-    data = data[:10]
     for idx, item in tqdm(enumerate(data), desc="Running KFC Inference", total=len(data)):
         question = item.question
         a_internal = kfc.generate_internal_answer(question)
@@ -153,7 +151,8 @@ def main():
         # generate_prompt = pair_prompt["generate"]
         repeat_prompt = pair_prompt["repeat"]
     
-    base_prompt = GENERATE_PROMPT["mj_prompt_v2"]
+    base_prompt = GENERATE_PROMPT["priori_judgement"]
+    # base_prompt = GENERATE_PROMPT["mj_prompt_v2"]
     # base_prompt = GENERATE_PROMPT["pure-llm-brief-2"]
 
 

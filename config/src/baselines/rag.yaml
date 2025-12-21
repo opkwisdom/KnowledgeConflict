@@ -1,10 +1,11 @@
 data:
-  data_path: data/nq/parametric_relevance_tagged/validation.json
+  name: triviaqa
+  data_path: data/triviaqa/retrieved/test.jsonl
   max_seq_length: 1024
   use_single_context: True
 
 model:
-  model_name: meta-llama/Meta-Llama-3-8B-Instruct
+  model_name: meta-llama/Llama-3.1-8B-Instruct
   gen_kwargs:
     do_sample: False
     temperature: 1.0
