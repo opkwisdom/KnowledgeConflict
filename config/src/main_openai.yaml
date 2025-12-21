@@ -14,10 +14,14 @@ model:
     max_new_tokens: 32
   prune:
     ratio: 0.3
+  conflict_topk: 100
+  control_metadata:
+    stats_path: experiments/cache_stats/kv_cache_control_stats.json
+    layer_info_path: experiments/cache_stats/conflict_layer_info.json
 
 judger:
   llm_model_name: gpt-4o-mini
-  prompt_name: base
+  prompt_name: single_eval
   cache_dir: src/cache_dir
   use_cache: True
   use_openai: True

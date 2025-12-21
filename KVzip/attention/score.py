@@ -50,7 +50,7 @@ class KVScore():
         key_states = torch.cat(
             [
                 key_states[:, :, :self.sink],  # sink tokens (generally system prompt)
-                key_states[:, :, self.start_idx:self.end_idx],  # KV chunk in the cache
+                key_states[:, :, self.start_idx:self.end_idx],  # KV chunk in the cache (Context)
                 key_states[:, :, -q_len:],  # KV repeat chunk
             ],
             dim=2)
@@ -59,12 +59,11 @@ class KVScore():
         # bsz, head_kv, n_c + n_in, dim
         key_states = key_states.unsqueeze(2).transpose(-2, -1).contiguous()
         ctx_len = self.end_idx - self.start_idx
-
         attn_weights = torch.matmul(query_states, key_states) / math.sqrt(head_dim)
         self._mask_causal(attn_weights, q_len)
 
         # bsz, head, group, q, ctx_len
-        raw_score = attn_weights.amax(dim=(-3, -2))
+        raw_score = attn_weights[..., self.sink:self.sink + ctx_len].amax(dim=(-3, -2))
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)  # not fp32
         attn_weights = attn_weights[..., self.sink:self.sink + ctx_len] # only consider the chunk in the cache
         score = attn_weights.amax(dim=(-3, -2))  # max over group, q
@@ -164,6 +163,47 @@ class KVScore():
 
         valids = torch.stack(valids)
         return valids, 0
+    
+    def validate_relevance(
+        self,
+        topk: int = 100,
+        control_cache_stats: Dict[int, Dict[str, float]] = None,
+        control_d: List[float] = None,
+    ) -> Tuple[bool, float]:
+        """
+        Method to analyze the computed scores
+        """
+        # Extract top-k diff scores
+        sample_topk_diff_scores = torch.zeros((self.n_layers, topk), dtype=torch.float32)
+
+        for i, layer_score in enumerate(self.raw_score):
+            score_flat = layer_score.reshape(-1)
+            topk_scores = torch.topk(score_flat, topk, largest=True).values
+            mean_score = torch.mean(score_flat)
+            topk_diff_scores = topk_scores - mean_score
+            sample_topk_diff_scores[i] = topk_diff_scores
+
+        # Compute conflict scores (Cohen's d)
+        d_layers = [int(layer) for layer in control_d.keys()]
+        x_mu = sample_topk_diff_scores.mean(dim=1)
+        x_std = sample_topk_diff_scores.std(dim=1)
+        
+        accept_ratio = 0
+        for layer_idx in d_layers:
+            x = {
+                "mean": x_mu[layer_idx].item(),
+                "std": x_std[layer_idx].item(),
+            }
+            y = control_cache_stats[layer_idx]
+            d = cohens_d(x, y)
+            if d >= control_d[layer_idx]:
+                accept_ratio += 1
+        accept_ratio /= len(d_layers)
+
+        if accept_ratio >= 0.5:
+            return True, accept_ratio
+        else:
+            return False, accept_ratio
 
 class HybridKVScore(KVScore):
 
@@ -175,10 +215,16 @@ class HybridKVScore(KVScore):
             torch.zeros((1, self.n_heads_kv, 0), dtype=self.dtype, device=self.device)
             for _ in range(self.num_static_layers)
         ]
-
     
     def _get_score(self, query_states, key_states, layer_idx):
         if layer_idx in self.layer_id_to_static_id:
             static_layer_idx = self.layer_id_to_static_id[layer_idx]
             super()._get_score(query_states, key_states, static_layer_idx)
 
+def cohens_d(x, y):
+    """
+    Compute Cohen's d between two distributions
+    """
+    pooled_std = ((x["std"] ** 2 + y["std"] ** 2) / 2) ** 0.5
+    d = abs(x["mean"] - y["mean"]) / pooled_std
+    return d

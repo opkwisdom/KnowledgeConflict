@@ -3,6 +3,7 @@ import torch
 from omegaconf import OmegaConf, DictConfig
 from datetime import datetime
 from dataclasses import dataclass, asdict
+from pydantic import BaseModel
 from tqdm import tqdm
 import logging
 import json
@@ -10,7 +11,7 @@ import os
 
 from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
-from judge_model import LLMJudger, OpenAIJudger, HfLLMJudger, JudgeOutput
+from judge_model import LLMJudger, OpenAIJudger, HfLLMJudger, JudgeOutput, CtxsRelevance
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
 from utils import (
     setup_logger, load_config, load_relevance_dataset, compute_metrics,
@@ -18,15 +19,14 @@ from utils import (
 )
 
 
-@dataclass
-class InferenceResult:
+class InferenceResult(BaseModel):
     id: int
     question: str
     pred_answer: str
     answers: List[str]
     metrics: MetricResult
-    has_answer: str
-    ctx_class: str
+    has_answer: bool
+    ctx_class: CtxsRelevance
 
 
 def run_inference(
@@ -45,17 +45,35 @@ def run_inference(
         if idx == 0:
             logger.info(f"Sample Internal Answer: {a_internal}")
         
+        # Irrelevant filtering
+        if config.data.use_single_context:
+            item.ctxs = [item.ctxs[0]]
+        
+        rel_ctxs, irr_ctxs =  kfc.filter_irrelevant_contexts(question, a_internal, item.ctxs)
+        # Case 1 - No relevant contexts
+        if not rel_ctxs:
+            sample_result = InferenceResult(
+                id=idx,
+                question=item.question,
+                pred_answer=a_internal,
+                answers=item.answers,
+                metrics=compute_metrics(a_internal, item.answers),
+                has_answer=item.ctxs[0].hasanswer,
+                ctx_class=CtxsRelevance(positive=[], negative=[], irrelevant=[0])
+            )
+            results["param_irrelevant"].append(sample_result)
+            continue
+        
+        # LLM Judging
         judge_output: JudgeOutput = llm_judger.judge(
             query=item.question,
             answer=a_internal,
-            contexts=item.ctxs #single
+            contexts=rel_ctxs
         )
         item.ctx_relevance = judge_output.ctx_relevance     # Real-time LLM judged relevance
-        # is_correct = llm_check_answer(query, a_internal, item.ctxs)
-        # is_correct = check_answer(a_internal, item.answers)     # Naive check
-
         is_correct = judge_output.is_correct
-        # Case 1 - Internal answer is correct
+        
+        # Case 2 - Internal answer is correct
         if is_correct:
             sample_result = InferenceResult(
                 id=idx,
@@ -67,7 +85,7 @@ def run_inference(
                 ctx_class=judge_output.ctx_relevance
             )
             results["param_true"].append(sample_result)
-        # Case 2 - Internal answer is incorrect
+        # Case 3 - Internal answer is incorrect
         else:
             # Facade pattern
             pred_answer, rel_type = kfc.resolve_and_generate(
@@ -89,7 +107,7 @@ def run_inference(
             )
             results[f"param_{rel_type}"].append(sample_result)
     logger.info("Inference completed.")
-    # logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
+    logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
 
     return results
 
@@ -127,7 +145,7 @@ def validate_and_save_results(
     logger.info(f"Saved inference summary to {summary_path}")
     with open(all_results_path, 'w') as f:
         json_results = {
-            k: [asdict(res) for res in v] for k, v in results.items()
+            k: [res.model_dump() for res in v] for k, v in results.items()
         }
         json.dump(json_results, f, ensure_ascii=False, indent=4)
 
@@ -151,9 +169,8 @@ def main():
         # generate_prompt = pair_prompt["generate"]
         repeat_prompt = pair_prompt["repeat"]
     
-    base_prompt = GENERATE_PROMPT["priori_judgement"]
     # base_prompt = GENERATE_PROMPT["mj_prompt_v2"]
-    # base_prompt = GENERATE_PROMPT["pure-llm-brief-2"]
+    base_prompt = GENERATE_PROMPT["pure-llm-brief-2"]
 
 
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]

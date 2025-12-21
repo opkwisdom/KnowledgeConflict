@@ -59,7 +59,7 @@ def load_head_score(model_name, ctx_len):
 
 
 class ModelKVzip():
-    def __init__(self, model_name: str, kv_type: str = "evict", gen_kwargs: dict = None, prompt: str = ""):
+    def __init__(self, model_name: str, kv_type: str = "evict", gen_kwargs: dict = None, prompt: str = "", logger=None):
         self.model, self.tokenizer = load_model(model_name)
 
         self.name = self.model.name
@@ -68,6 +68,7 @@ class ModelKVzip():
         self.config = self.model.config
         self.prompt = prompt    # Prompt for KV scoring
         self.raw_score = None
+        self.logger = logger
 
         if isinstance(self.model, LlamaForCausalLMW8A8):
             self.kv_type = "int4static"
@@ -247,6 +248,11 @@ class ModelKVzip():
 
             kv.end_idx = 0
             input_ids = self.self_task(ctx_ids, q_ids, a_ids)
+            # Log input ids for debugging
+            # self.logger.info(f"Input ids (Context):\n{self.tokenizer.decode(input_ids[0][0][0])}")
+            # self.logger.info(f"Context shape: {input_ids[0][0][0].shape}")
+            # self.logger.info(f"Input ids (Full ids):\n{self.tokenizer.decode(input_ids[0][1][0])}")
+            # self.logger.info(f"Full input shape: {input_ids[0][1][0].shape}")
             for i, (prefill_ids_p,
                     repeat_ids_p) in enumerate(tqdm(input_ids, desc=f"Importance scoring", disable=True)):
                 kv.end_idx = kv.start_idx + prefill_ids_p.shape[1]  # indices for a chunk

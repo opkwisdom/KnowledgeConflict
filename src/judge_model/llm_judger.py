@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 from omegaconf import DictConfig
 
-@dataclass
 class CtxsRelevance(BaseModel):
     positive: List[int] = Field(..., description="List of 0-based indices for positive contexts")
     negative: List[int] = Field(..., description="List of 0-based indices for negative contexts")
@@ -29,9 +28,7 @@ class CtxsRelevance(BaseModel):
                 mapping[i] = "irrelevant"
         return mapping
 
-@dataclass
 class JudgeOutput(BaseModel):
-    # reasoning: str = Field(..., description="The reasoning provided by the LLM for its judgment")
     is_correct: bool = Field(..., description="Whether the answer is judged correct or not")
     ctx_relevance: CtxsRelevance = Field(..., description="Contextual relevance information")
 

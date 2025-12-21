@@ -15,6 +15,15 @@ PSEUDO_PASSAGE_PROMPT = {
     }
 }
 
+GENERATE_PROMPT = {
+    "base": (
+        "Answer the question based on your knowledge briefly. "
+        "Output only the answer entity or phrase. "
+        "Do not use complete sentences.\n\n"
+        "Question: {question}\n\n"
+    )
+}
+
 ### Naive style
 # "generate": f"\n\nGenerate a pseudo-passage which is relevant to the Question.",
 

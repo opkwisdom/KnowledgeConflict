@@ -6,6 +6,7 @@ from transformers import (
     AutoModelForCausalLM, AutoTokenizer,
     LlamaConfig,
 )
+import json
 
 from KVzip.model import ModelKVzip
 from KVzip.attention import RetainCache, EvictCache
@@ -63,7 +64,8 @@ class KnowledgeFusionCore:
         critical_indices = None
         if isinstance(self.model.config, LlamaConfig):
             critical_indices = LLAMA_CRITICAL_INDICES
-        
+            self.selected_layers = LLAMA_CRITICAL_INDICES
+
         if critical_indices:
             self.critical_map, self.normal_map = self._parse_critical_indices(critical_indices)
         else:
@@ -71,6 +73,37 @@ class KnowledgeFusionCore:
             self.logger.warning("No critical indices found for the model.")
         
         self.set_base_chat_template()
+        
+        # control cache stats
+        control_metadata = self.config.model.get("control_metadata", None)
+        control_cache_path = control_metadata.get("stats_path", None)
+        control_layer_info_path = control_metadata.get("layer_info_path", None)
+
+        if control_cache_path:
+            with open(control_cache_path, "r") as f:
+                control_cache_stats = json.load(f)
+            control_cache_stats = control_cache_stats["control_stat"]
+            self.control_cache_stats = {
+                int(idx): {
+                    "mean": control_cache_stats[int(idx)]["mean"],
+                    "std": control_cache_stats[int(idx)]["std"],
+                }
+                for idx in self.selected_layers
+            }
+        else:
+            self.control_cache_stats = None
+            self.logger.warning("No control cache stats path provided.")
+
+        if control_layer_info_path:
+            with open(control_layer_info_path, "r") as f:
+                conflict_layer_info = json.load(f)
+            self.selected_d = {
+                int(idx): conflict_layer_info["sorted_scores"]["min_d"][i]
+                for i, idx in enumerate(self.selected_layers)
+            }
+        else:
+            self.selected_d = None
+            self.logger.warning("No conflict layer info path provided.")
 
     # For user convenience access
     @property
@@ -215,6 +248,38 @@ class KnowledgeFusionCore:
         generated_text = self._kvzip.decode(gen_ids)
         
         return generated_text, final_rel_type
+    
+    def filter_irrelevant_contexts(
+        self,
+        question: str,
+        internal_answer: str,
+        contexts: List[CtxExample]
+    ) -> Tuple[List[CtxExample], List[CtxExample]]:
+        relevant_contexts = []
+        irrelevant_contexts = []
+
+        for ctx_ex in contexts:
+            context = f"Title: {ctx_ex.title}\n\n{ctx_ex.text}"
+            kv = self.prefill(
+                ctx_ids=context,
+                q_ids=self._kvzip.encode(f"Question: {question}\n"),
+                a_ids=self._kvzip.encode(f"Answer: {internal_answer}\n"),
+                load_score=False,
+                do_score=True,
+            )
+            kv.to("cpu")
+
+            is_rel, _ = kv.validate_relevance(
+                topk=self.config.model.conflict_topk,
+                control_cache_stats=self.control_cache_stats,
+                control_d=self.selected_d
+            )
+            if is_rel:
+                relevant_contexts.append(ctx_ex)
+            else:
+                irrelevant_contexts.append(ctx_ex)
+        
+        return relevant_contexts, irrelevant_contexts
     
     @torch.inference_mode()
     def generate_internal_answer(

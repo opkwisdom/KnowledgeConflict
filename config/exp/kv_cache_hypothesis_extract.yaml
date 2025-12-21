@@ -10,11 +10,13 @@ model:
     temperature: 1.0
     top_p: 1
     top_k: null
-    max_new_tokens: 256
+    max_new_tokens: 32
   batch_size: 8
   prune:
     ratio: 0.3
 
 prompt_name: base
+generate_prompt_name: base
 output_dir: experiments/hypo_test
 task: base
+do_answer: True

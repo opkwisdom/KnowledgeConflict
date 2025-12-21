@@ -4,9 +4,9 @@ import regex
 from collections import Counter
 from typing import List
 from dataclasses import dataclass
+from pydantic import BaseModel
 
-@dataclass
-class MetricResult:
+class MetricResult(BaseModel):
     soft_em: bool
     recall: float
     precision: float
