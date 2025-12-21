@@ -3,11 +3,11 @@ import torch
 from omegaconf import OmegaConf, DictConfig
 from datetime import datetime
 from dataclasses import dataclass, asdict
-from pydantic import BaseModel
 from tqdm import tqdm
 import logging
 import json
 import os
+from pydantic import BaseModel
 
 from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
@@ -46,35 +46,15 @@ def run_inference(
         if idx == 0:
             logger.info(f"Sample Internal Answer: {a_internal}")
         
-        # Irrelevant filtering
-        if config.data.use_single_context:
-            item.ctxs = [item.ctxs[0]]
-        
-        rel_ctxs, irr_ctxs =  kfc.filter_irrelevant_contexts(question, a_internal, item.ctxs)
-        # Case 1 - No relevant contexts
-        if not rel_ctxs:
-            sample_result = InferenceResult(
-                id=idx,
-                question=item.question,
-                pred_answer=a_internal,
-                answers=item.answers,
-                metrics=compute_metrics(a_internal, item.answers),
-                has_answer=item.ctxs[0].hasanswer,
-                ctx_class=CtxsRelevance(positive=[], negative=[], irrelevant=[0])
-            )
-            results["param_irrelevant"].append(sample_result)
-            continue
-        
-        # LLM Judging
         judge_output: JudgeOutput = llm_judger.judge(
             query=item.question,
             answer=a_internal,
-            contexts=rel_ctxs
+            contexts=item.ctxs #single
         )
         item.ctx_relevance = judge_output.ctx_relevance     # Real-time LLM judged relevance
-        is_correct = judge_output.is_correct
         
-        # Case 2 - Internal answer is correct
+        is_correct = judge_output.is_correct
+        # Case 1 - Internal answer is correct
         if is_correct:
             sample_result = InferenceResult(
                 id=idx,
@@ -108,7 +88,7 @@ def run_inference(
             )
             results[f"param_{rel_type}"].append(sample_result)
     logger.info("Inference completed.")
-    logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
+    # logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
 
     return results
 

@@ -29,7 +29,6 @@ def llama_qwen_attn_forward(
     bsz, q_len, _ = hidden_states.size()
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
-
     if isinstance(self, Qwen3Attention):
         query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
         key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)

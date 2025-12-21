@@ -63,11 +63,10 @@ def detect_conflict_base(
         a_internal = item["parametric_answer"]
     
     is_correct = has_answer(a_internal, item['answers'])
-    # logger.info(f"Internal Answer: {a_internal} (Correct: {is_correct})")
 
     # These two inputs are used for detecting conflict
-    q_ids = model.encode(f"Q: {item['question']}\n\n")
-    a_ids = model.encode(f"A: {a_internal}\n\n")
+    q_ids = model.encode(f"Question: {item['question']}\n")
+    a_ids = model.encode(f"Answer: {a_internal}\n")
     # logger.info(f"q_ids shape: {q_ids.shape}, a_ids shape: {a_ids.shape}")
     
     # Detect conflict by repeated generation
@@ -153,85 +152,51 @@ def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_di
     }
 
     prompt = GENERATE_PROMPT[config.generate_prompt_name]
-    # Select detection function
-    detect_conflict_func = None
-    if config.task == "base" or config.task is None:
-        detect_conflict_func = detect_conflict_base
-    elif config.task == "pseudo-passage":
-        detect_conflict_func = detect_conflict_pseudo_passage
+    logger.info(f"Using prompt:\n{prompt}")
 
+    # Select detection function
+    task_map = {
+        "pseudo-passage": detect_conflict_pseudo_passage,
+        "base": detect_conflict_base,
+    }
+    detect_conflict_func = task_map.get(config.task, detect_conflict_base)
     is_pseudo_passage = (detect_conflict_func == detect_conflict_pseudo_passage)
+
+    # Metadata for loop
+    context_types = [
+        ("positive", "relevant", "rel"),
+        ("negative", "negative", "neg"),
+        ("irrelevant", "irrelevant", "irr"),
+    ]
 
     for i, item in tqdm(enumerate(data), total=len(data), desc="Testing hypothesis"):
         rel = item["ctx_relevance"]
-        pos_ids = rel["positive"]
-        neg_ids = rel["negative"]
-        irr_ids = rel["irrelevant"]
-        all_case = len(pos_ids) * len(neg_ids) * len(irr_ids) > 0
-        if not all_case:
+        if not all(len(rel[c_key]) > 0 for c_key, _, _ in context_types):
             continue
+
         case_num += 1
 
         # Prepare KV cache with only one context
-        # Positive context
-        for pos_idx in pos_ids:
-            if is_pseudo_passage:
-                pos_kv, a_internal, is_correct = detect_conflict_func(config, model, item, pos_idx, prompt, generate_prompt, logger)
-            else:
-                pos_kv, a_internal, is_correct = detect_conflict_func(config, model, item, pos_idx, prompt, logger)
-            test_ex = TestEx(
-                id=i,
-                question=item['question'],
-                a_internal=a_internal,
-                answers=item['answers'],
-                ctx_idx=pos_idx,
-                ctx_rel="relevant",
-                kv_cache_score=pos_kv,
-            )
-            if is_correct:
-                test_results["true_rel"].append(test_ex)
-            else:
-                test_results["false_rel"].append(test_ex)
+        for ctx_key, label, result_suffix in context_types:
+            for ctx_idx in rel[ctx_key]:
+                # Send to detection function as positional arguments
+                func_args = [config, model, item, ctx_idx, prompt]
+                if is_pseudo_passage:
+                    func_args.append(generate_prompt)
+                func_args.append(logger)
 
-        # Negative context
-        for neg_idx in neg_ids:
-            if is_pseudo_passage:
-                neg_kv, a_internal, is_correct = detect_conflict_func(config, model, item, neg_idx, prompt, generate_prompt, logger)
-            else:
-                neg_kv, a_internal, is_correct = detect_conflict_func(config, model, item, neg_idx, prompt, logger)
-            test_ex = TestEx(
-                id=i,
-                question=item['question'],
-                a_internal=a_internal,
-                answers=item['answers'],
-                ctx_idx=neg_idx,
-                ctx_rel="negative",
-                kv_cache_score=neg_kv,
-            )
-            if is_correct:
-                test_results["true_neg"].append(test_ex)
-            else:
-                test_results["false_neg"].append(test_ex)
-
-        # Irrelevant context
-        for irr_idx in irr_ids:
-            if is_pseudo_passage:
-                irr_kv, a_internal, is_correct = detect_conflict_func(config, model, item, irr_idx, prompt, generate_prompt, logger)
-            else:
-                irr_kv, a_internal, is_correct = detect_conflict_func(config, model, item, irr_idx, prompt, logger)
-            test_ex = TestEx(
-                id=i,
-                question=item['question'],
-                a_internal=a_internal,
-                answers=item['answers'],
-                ctx_idx=irr_idx,
-                ctx_rel="irrelevant",
-                kv_cache_score=irr_kv,
-            )
-            if is_correct:
-                test_results["true_irr"].append(test_ex)
-            else:
-                test_results["false_irr"].append(test_ex)
+                kv_score, a_internal, is_correct = detect_conflict_func(*func_args)
+                test_ex = TestEx(
+                    id=i,
+                    question=item['question'],
+                    a_internal=a_internal,
+                    answers=item['answers'],
+                    ctx_idx=ctx_idx,
+                    ctx_rel=label,
+                    kv_cache_score=kv_score,
+                )
+                status = "true" if is_correct else "false"
+                test_results[f"{status}_{result_suffix}"].append(test_ex)
     
     logger.info(f"Total hypothesis test cases: {case_num}")
     for key, lst in test_results.items():
@@ -294,7 +259,7 @@ def main():
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model
-    model = ModelKVzip(config.model.model_name, gen_kwargs=config.model.gen_kwargs, prompt=repeat_prompt)
+    model = ModelKVzip(config.model.model_name, gen_kwargs=config.model.gen_kwargs, prompt=repeat_prompt, logger=logger)
     logger.info(f"Model {config.model.model_name} initialized.")
 
     # generate_pseudo_passage(config, model, data, config.output_dir, generate_prompt, logger)

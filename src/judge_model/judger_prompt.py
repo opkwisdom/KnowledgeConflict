@@ -30,6 +30,48 @@ OPENAI = {
             "Provide the output strictly using the provided JSON schema."
         )
     },
+    "single_eval": {
+        "system": (
+            "You are an objective evaluator for a Retrieval-Augmented Generation (RAG) system.\n"
+            "Your task is to classify the relevance of a single retrieved context and to judge the factual correctness of the answer."
+        ),
+        "user": (
+            "### Task Description\n"
+            "1. **Analyze Contexts**: Classify the provided context (index 0) as 'positive' or 'negative'.\n"
+            "   - **Positive**: The context provides sufficient information or evidence to derive the answer. "
+            "Direct mention is preferred, but clear semantic matches and obvious implications are also allowed.\n"
+            "   - **Negative**: The context lacks the necessary information, provides only partial clues,"
+            " contains outdated facts, or is entirely off-topic.\n\n"
+
+            "2. **Determine Correctness**: Determine if the 'Internal Answer' provides a factually correct response to the 'Query'.\n\n"
+            
+            "### One-Shot Examples\n"
+            "**Example 1: Positive**\n"
+            "- Query: where did they film hot hub time machine?\n"
+            "- Internal Answer: Fernie Alpine Resort\n"
+            "- Context: [0]\nTitle: Hot Tub Time Machine\n\n...It was filmed primarily at the Vancouver Film Studios"
+            " in Vancouver and the Fernie Alpine Resort in Fernie, British Columbia.\n"
+            "- Output: {{ \"is_correct\": true, \"ctx_relevance\": {{ \"positive\": [0], \"negative\": [], \"irrelevant\": [] }} }}\n\n"
+
+            "**Example 2: Negative**\n"
+            "- Query: where did they film hot tub time machine\n"
+            "- Internal Answer: Fernie Alpine Resort\n"
+            "- Context: [0]\nTitle: Fernie Alpine Resort\n\nDuring spring 2009, Fernie Alpine Resort was transformed into the fictional Kodiak Valley ski resort, circa 1986, for exterior location shots of the Hollywood\n"
+            "- Output: {{ \"is_correct\": true, \"ctx_relevance\": {{ \"positive\": [], \"negative\": [0], \"irrelevant\": [] }} }}\n\n"
+
+            "### Input Data\n"
+            "- Query: {query}\n"
+            "- Internal Answer: {internal_answer}\n"
+            "- Context: {formatted_contexts}\n\n"
+
+            "### Output Rules (Strict)\n"
+            "1. Return a valid JSON object matching the JudgeOutput schema:\n"
+            "2. You MUST use index [0] for the classification.\n"
+            "- 'is_correct': boolean\n"
+            "- 'ctx_relevance': {{ 'positive': [0], 'negative': [], 'irrelevant': [] }} (if Positive)\n"
+            "- 'ctx_relevance': {{ 'positive': [], 'negative': [0], 'irrelevant': [] }} (if Negative)\n"
+        )
+    },
     "mj_prompt": {
         "system": (
             "You are an expert evaluator for a RAG system. "

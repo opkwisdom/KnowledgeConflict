@@ -1,37 +1,8 @@
-data = {
-    "param_true": {
-        "total": 59,
-        "correct": 36,
-        "accuracy": 0.6102,
-        "recall": 0.7291,
-        "precision": 0.5847,
-        "f1": 0.6142
-    },
-    "param_positive": {
-        "total": 13,
-        "correct": 9,
-        "accuracy": 0.6923,
-        "recall": 0.7692,
-        "precision": 0.6467,
-        "f1": 0.6388
-    },
-    "param_negative": {
-        "total": 16,
-        "correct": 5,
-        "accuracy": 0.3125,
-        "recall": 0.3438,
-        "precision": 0.2634,
-        "f1": 0.2846
-    },
-    "param_irrelevant": {
-        "total": 12,
-        "correct": 1,
-        "accuracy": 0.0833,
-        "recall": 0.1944,
-        "precision": 0.0277,
-        "f1": 0.048
-    }
-}
+import json
+
+SUMMARY_PATH = "results/main/e2e_openai/ratio=0.3_prompt=base/20251221_050805/inference_summary.txt"
+with open(SUMMARY_PATH, 'r') as f:
+    data = json.load(f)
 
 # 1. 전체 개수 및 가중치 합계를 저장할 변수 초기화
 total_samples = 0

@@ -103,6 +103,7 @@ def load_json_data(data_path: str):
     elif ext == '.json':
         with open(data_path, 'r') as f:
             data = json.load(f)
+        return data
     else:
         raise ValueError(f"Unsupported file extension: {ext}")
 

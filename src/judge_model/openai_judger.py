@@ -24,7 +24,6 @@ class OpenAIJudger(LLMJudger):
     def __init__(self, config: DictConfig):
         super().__init__(config)
         self.prompt = self.set_prompt(config.prompt_name)
-        print(config.prompt_name)
         self.total_cost = 0.0
         self.llm_model_name = config.llm_model_name
         self.use_cache = config.use_cache
@@ -61,24 +60,24 @@ class OpenAIJudger(LLMJudger):
 
     def set_prompt(self, prompt: str):
         return OPENAI.get(prompt, OPENAI["base"])
-    
-        # return OPENAI.get(prompt, OPENAI["mj_prompt"])
 
     def judge(self, query: str, answer: str, contexts: List[CtxExample]) -> JudgeOutput:
         # Prepare the input prompt
         if( len(contexts) > 1):
             formatted_ctx = "\n".join([f"[{i}]\nTitle: {ctx.title}\n\n{ctx.text}\n" for i, ctx in enumerate(contexts)])
-        # # else:
-        # single_ctx = contexts[0]
-        # formatted_ctx = f"Title: {single_ctx.title}\n\n{single_ctx.text}"
+        else:
+            single_ctx = contexts[0]
+            formatted_ctx = f"[0]\nTitle: {single_ctx.title}\n\n{single_ctx.text}"
         
-        
-        user_content = self.prompt["user"].format(
-            query=query,
-            internal_answer=answer,
-            formatted_contexts=formatted_ctx,
-            last_index=len(contexts)-1
-        )
+        format_args = {
+            "query": query,
+            "internal_answer": answer,
+            "formatted_contexts": formatted_ctx,
+        }
+        if "single" not in self.config.prompt_name:
+            format_args["last_index"] = len(contexts) - 1
+
+        user_content = self.prompt["user"].format(**format_args)
         # Check cache
         cache_key = self._get_cache_key(user_content)
         if self.use_cache:

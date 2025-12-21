@@ -213,7 +213,7 @@ def main():
         subdir = f"{config.prompt_name}"
     subdir = f"{subdir}_log" if config.use_log_scale else subdir
 
-    config.output_dir = os.path.join(config.output_dir, subdir)     # for different prompts
+    config.output_dir = os.path.join(config.output_dir, subdir, cur_time)     # for different prompts
     os.makedirs(config.output_dir, exist_ok=True)
     logger = setup_logger(f"kv_cache_hypothesis_plot_{cur_time}", config.output_dir)
     logger.info("Configuration Loaded:")

@@ -98,7 +98,7 @@ class KnowledgeFusionCore:
             with open(control_layer_info_path, "r") as f:
                 conflict_layer_info = json.load(f)
             self.selected_d = {
-                int(idx): conflict_layer_info["sorted_scores"]["min_d"][i]
+                int(idx): conflict_layer_info["sorted_scores"]["mean_d"][i]
                 for i, idx in enumerate(self.selected_layers)
             }
         else:
