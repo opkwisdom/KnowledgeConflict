@@ -1,6 +1,7 @@
 # Data files
 data/
 index/
+**/wandb
 **/*.log
 **/__pycache__
 **/*.png
@@ -11,3 +12,4 @@ index/
 **/src/results
 **/*.html
 **/.env
+**/*.pth

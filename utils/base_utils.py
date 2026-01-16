@@ -7,11 +7,13 @@ import os
 def load_config() -> DictConfig:
     parser = ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to the config file. (YAML)")
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
 
     with open(args.config, 'r') as f:
         if args.config.endswith('.yaml') or args.config.endswith('.yml'):
-            config = OmegaConf.load(f)
+            base_config = OmegaConf.load(f)
+            cli_config = OmegaConf.from_dotlist(unknown)
+            config = OmegaConf.merge(base_config, cli_config)
             return config
         else:
             raise ValueError("Unsupported configuration file format. Please use YAML.")

@@ -115,33 +115,36 @@ OPENAI = {
     },
     "single_context_eval": {
         "system": (
-            "You are an expert RAG Evaluator. "
-            "You will be given a Query, a single Retrieved Context, and an Internal Answer. "
-            "Your task is to classify the context's relevance and verify the answer's correctness."
+            "You are a SKEPTICAL and STRICT Logic Gate for a QA system. "
+            "Your goal is to filter out hallucinated answers. "
+            "Adopt a 'Guilty until proven innocent' mindset for the Internal Answer."
         ),
         "user": (
-            "### Task Description\n"
-            "1. **Classify Context**: Analyze the provided 'Retrieved Context' strictly based on the 'Query'.\n"
-            "   - **positive**: The context contains EXPLICIT information or strong clues to answer the query.\n"
-            "   - **negative** (Hard Negative): The context discusses the SAME entity/topic as the query but FAILS to provide the specific answer.\n"
-            "   - **irrelevant**: The context is about a different entity or completely unrelated.\n\n"
+            "### Task Overview\n"
+            "Evaluate the 'Internal Answer' and the single provided 'Context'.\n"
+            "Follow this priority strictly:\n\n"
 
-            "2. **Verify Answer**: Determine if the 'Internal Answer' is factually correct based on the 'Query'.\n"
-            "   - Focus on the core entity/fact. Ignore verbosity or style issues.\n\n"
+            "### Step 1: Verify Internal Answer (Parametric Knowledge)\n"
+            "Does the 'Internal Answer' contain the undeniably correct fact for the 'Query'?\n"
+            "   - **is_correct**: Set to `true` ONLY if the core fact is correct and you are certain.\n"
+            "   - **Strict Rule**: If the answer is ambiguous, hallucinated, or you are unsure, mark it as `false`.\n"
+            "   - Ignore verbosity/style. Focus on core facts.\n\n"
+
+            "### Step 2: Classify Context Utility\n"
+            "Analyze the context to see if it provides the answer:\n"
+            "   - **Positive**: The context contains the information needed to answer the query.\n"
+            "   - **Negative** (Hard Negative): The context discusses the SAME entity/topic as the query but FAILS to provide the specific answer.\n"
 
             "### Input Data\n"
             "- Query: {query}\n"
-            "- Internal Answer: {internal_answer}\n\n"
-            "### Retrieved Context\n"
-            "{formatted_contexts}\n\n"
+            "- Internal Answer: {internal_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
 
-            "### Output Format\n"
-            "Provide the output in valid JSON format only.\n"
-            "{{\n"
-            "  \"reasoning\": \"Brief explanation...\",\n"
-            "  \"ctx_relevance\": [\"positive\"], \n" 
-            "  \"is_correct\": true\n"
-            "}}"
+            "### Output Requirement\n"
+            "Return valid JSON strictly adhering to the schema.\n"
+            "**Do NOT copy values from the example. Judge based on actual input.**\n"
+            "Example (Internal Answer is Wrong, Context is Hard Negative):\n"
+            "{{ \"is_correct\": false, \"ctx_relevance\": {{ \"positive\": [], \"negative\": [0] }} }}"
         )
     }
 }

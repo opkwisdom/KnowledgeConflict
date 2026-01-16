@@ -188,7 +188,7 @@ class KVScore():
         x_mu = sample_topk_diff_scores.mean(dim=1)
         x_std = sample_topk_diff_scores.std(dim=1)
         
-        accept_ratio = 0
+        accept_count = 0
         for layer_idx in d_layers:
             x = {
                 "mean": x_mu[layer_idx].item(),
@@ -197,13 +197,12 @@ class KVScore():
             y = control_cache_stats[layer_idx]
             d = cohens_d(x, y)
             if d >= control_d[layer_idx]:
-                accept_ratio += 1
-        accept_ratio /= len(d_layers)
+                accept_count += 1
 
-        if accept_ratio >= 0.5:
-            return True, accept_ratio
+        if accept_count:
+            return True, accept_count
         else:
-            return False, accept_ratio
+            return False, accept_count
 
 class HybridKVScore(KVScore):
 

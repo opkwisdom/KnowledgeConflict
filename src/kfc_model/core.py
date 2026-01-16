@@ -11,7 +11,10 @@ import json
 from KVzip.model import ModelKVzip
 from KVzip.attention import RetainCache, EvictCache
 from utils import CtxExample, CtxsRelevance, template
+
 from .conflict_resources import *
+from .conflict_handler import ConflictConfigHandler
+from .lexical_keeper import LexicalKeeper
 
 class KnowledgeFusionCore:
     def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
@@ -21,89 +24,17 @@ class KnowledgeFusionCore:
         self.base_prompt: str = base_prompt
         self.logger: logging.Logger = logger
         self.model_name: str = config.model.model_name
+
+        self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config, logger)
         self.__post_init__()
     
     def set_base_chat_template(self, task: str = "qa"):
         # Use base template for internal answer generation
         prefix, postfix = template(self.model_name, task, base_template=True)
         self.sys_prompt_ids, self.postfix_ids = self._kvzip.encode(prefix), self._kvzip.encode(postfix)
-
-    def _parse_critical_indices(self, critical_indices: Optional[List[str]]
-        ) -> Tuple[Dict[int, List[int]], Dict[int, List[int]]]:
-        NUM_HEADS = getattr(self.model.config, "num_key_value_heads", None)
-        NUM_LAYERS = self.model.config.num_hidden_layers
-
-        critical_map: Dict[int, List[int]] = {}
-        normal_map: Dict[int, List[int]] = {}
-
-        for item in critical_indices:
-            parts = item.split('_')
-            layer_idx = int(parts[0])
-
-            if layer_idx not in critical_map:
-                critical_map[layer_idx] = []
-            
-            if len(parts) == 1:
-                critical_map[layer_idx] = list(range(NUM_HEADS))
-            else:
-                head_idx = int(parts[1])
-                critical_map[layer_idx].append(head_idx)
-        
-        for layer_idx in range(NUM_LAYERS):
-            all_heads_in_layer = set(range(NUM_HEADS))
-            critical_heads = critical_map.get(layer_idx, set())
-
-            normal_heads = all_heads_in_layer - set(critical_heads)
-            if normal_heads:
-                normal_map[layer_idx] = list(normal_heads)
-        
-        return critical_map, normal_map
     
     def __post_init__(self):
-        # init conflict
-        critical_indices = None
-        if isinstance(self.model.config, LlamaConfig):
-            critical_indices = LLAMA_CRITICAL_INDICES
-            self.selected_layers = LLAMA_CRITICAL_INDICES
-
-        if critical_indices:
-            self.critical_map, self.normal_map = self._parse_critical_indices(critical_indices)
-        else:
-            self.critical_map, self.normal_map = {}, {}
-            self.logger.warning("No critical indices found for the model.")
-        
         self.set_base_chat_template()
-        
-        # control cache stats
-        control_metadata = self.config.model.get("control_metadata", None)
-        control_cache_path = control_metadata.get("stats_path", None)
-        control_layer_info_path = control_metadata.get("layer_info_path", None)
-
-        if control_cache_path:
-            with open(control_cache_path, "r") as f:
-                control_cache_stats = json.load(f)
-            control_cache_stats = control_cache_stats["control_stat"]
-            self.control_cache_stats = {
-                int(idx): {
-                    "mean": control_cache_stats[int(idx)]["mean"],
-                    "std": control_cache_stats[int(idx)]["std"],
-                }
-                for idx in self.selected_layers
-            }
-        else:
-            self.control_cache_stats = None
-            self.logger.warning("No control cache stats path provided.")
-
-        if control_layer_info_path:
-            with open(control_layer_info_path, "r") as f:
-                conflict_layer_info = json.load(f)
-            self.selected_d = {
-                int(idx): conflict_layer_info["sorted_scores"]["mean_d"][i]
-                for i, idx in enumerate(self.selected_layers)
-            }
-        else:
-            self.selected_d = None
-            self.logger.warning("No conflict layer info path provided.")
 
     # For user convenience access
     @property
@@ -156,37 +87,25 @@ class KnowledgeFusionCore:
                 self.logger.error(f"Context index {ctx_idx} not found in relevance map.")
                 relevance = "irrelevant"
 
-            # Case 2a - Context is relevant
-            if relevance == "positive":
-                kv = self.prefill(
-                    ctx_ids=context,
-                    q_ids=q_ids,
-                    a_ids=a_ids,
-                )
-                kv.prune(
-                    ratio=prune_ratio,
-                    prune_kwargs=self.normal_map,
-                    prune_type=relevance
-                )
-                evicted_kvs.append(kv)
-            
-            # Case 2b - Context is negative
-            # TODO: Embed [THINK] token logic here
-            elif relevance == "negative":
-                kv = self.prefill(
-                    ctx_ids=context,
-                    q_ids=q_ids,
-                    a_ids=a_ids,
-                )
-                kv.prune(
-                    ratio=prune_ratio,
-                    prune_kwargs=self.critical_map,
-                    prune_type=relevance
-                )
-                evicted_kvs.append(kv)
-            # Case 2c - Context is irrelevant
-            else:
+            # Case 1 - Irrelevant context
+            if relevance == "irrelevant":
                 kv = None    # Skip
+                evicted_kvs.append(kv)
+                continue
+            # Case 2 - Conflict context
+            else:
+                prune_map = self.conflict_handler.normal_map if relevance == "negative"\
+                                else self.conflict_handler.critical_map
+                kv = self.prefill(
+                    ctx_ids=context,
+                    q_ids=q_ids,
+                    a_ids=a_ids,
+                )
+                kv.prune(
+                    ratio=prune_ratio,
+                    prune_kwargs=prune_map,
+                    prune_type=relevance
+                )
                 evicted_kvs.append(kv)
         
         return evicted_kvs
@@ -271,8 +190,8 @@ class KnowledgeFusionCore:
 
             is_rel, _ = kv.validate_relevance(
                 topk=self.config.model.conflict_topk,
-                control_cache_stats=self.control_cache_stats,
-                control_d=self.selected_d
+                control_cache_stats=self.conflict_handler.control_cache_stats,
+                control_d=self.conflict_handler.selected_d
             )
             if is_rel:
                 relevant_contexts.append(ctx_ex)

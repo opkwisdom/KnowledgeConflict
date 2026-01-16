@@ -177,6 +177,7 @@ class ModelKVzip():
         prefill_chunk_size: int = 16000,
         load_score=False,
         do_score=True,
+        remove_sink: bool = False,
     ) -> Union[RetainCache, EvictCache]:
         """ Chunked prefill KV cache
         """
@@ -195,9 +196,9 @@ class ModelKVzip():
         if do_score:
             # KV importance scoring
             if a_ids is None:
-                self.scoring(kv, ctx_ids, q_ids, load_score=load_score)
+                self.scoring(kv, ctx_ids, q_ids, load_score=load_score, remove_sink=remove_sink)
             else:
-                self.scoring(kv, ctx_ids, q_ids, a_ids, load_score=load_score)
+                self.scoring(kv, ctx_ids, q_ids, a_ids, load_score=load_score, remove_sink=remove_sink)
         return kv
 
     def self_task(
@@ -239,6 +240,7 @@ class ModelKVzip():
         q_ids: torch.Tensor,
         a_ids: torch.Tensor = None,
         load_score=False,
+        remove_sink: bool = False,
     ):
         """ KV importance scoring (update kv.score)
         """

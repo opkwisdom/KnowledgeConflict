@@ -2,6 +2,9 @@ from argparse import ArgumentParser
 from omegaconf import OmegaConf, DictConfig
 import logging
 import os
+import random
+import numpy as np
+import torch
 
 
 def load_config() -> DictConfig:
@@ -46,3 +49,12 @@ def setup_logger(name, log_dir: str, level=logging.INFO) -> logging.Logger:
     logger.addHandler(ch)
 
     return logger
+
+def set_seed(seed: int):
+    """Sets the seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)    # For multi-GPU setups
+    os.environ['PYTHONHASHSEED'] = str(seed)

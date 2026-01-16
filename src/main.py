@@ -60,7 +60,7 @@ def run_inference(
                 answers=item.answers,
                 metrics=compute_metrics(a_internal, item.answers),
                 has_answer=item.ctxs[0].hasanswer,
-                ctx_class=CtxsRelevance(positive=[], negative=[], irrelevant=[0])
+                ctx_class=CtxsRelevance(positive=[], negative=[])
             )
             results["param_irrelevant"].append(sample_result)
             continue
@@ -91,7 +91,7 @@ def run_inference(
             # Facade pattern
             pred_answer, rel_type = kfc.resolve_and_generate(
                 query=item.question,
-                contexts=item.ctxs,
+                contexts=rel_ctxs,
                 relevance=item.ctx_relevance,
                 internal_answer=a_internal,
                 use_single_context=True,    # Temporary
@@ -180,6 +180,7 @@ def main():
 
     # Load data
     data = load_relevance_dataset(config.data.data_path)
+    data = data[:100]   # debug
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model
