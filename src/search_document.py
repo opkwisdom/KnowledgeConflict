@@ -11,6 +11,7 @@ from omegaconf import OmegaConf, DictConfig
 from pyserini.search.faiss import FaissSearcher
 from datasets import load_dataset
 import torch
+import logging
 import json
 import os
 from torch.utils.data import DataLoader
@@ -31,7 +32,7 @@ from utils import (
 DENSE_ENCODER = 'wikipedia-dpr-100w.ance-multi'
 
 args = load_config()
-
+logger = logging.getLogger(__name__)
 
 JsonType = Dict[str, Any]
 
@@ -76,7 +77,7 @@ def _query_transform_func(tokenizer: PreTrainedTokenizerFast,
 
 
 @torch.no_grad()
-def _worker_encode_queries(gpu_idx: int, logger) -> Tuple[np.ndarray, List[JsonType]]:
+def _worker_encode_queries(gpu_idx: int) -> Tuple[np.ndarray, List[JsonType]]:
     # Load dataset
     input_path = os.path.join(args.data_dir, args.input_file)
     dataset = load_dataset("json", data_files=input_path)["train"]
@@ -120,8 +121,8 @@ def _worker_encode_queries(gpu_idx: int, logger) -> Tuple[np.ndarray, List[JsonT
 
 
 @torch.no_grad()
-def _worker_batch_search(gpu_idx: int, logger, searcher) -> List[QAExample]:
-    query_embeds, original_dataset = _worker_encode_queries(gpu_idx, logger)
+def _worker_batch_search(gpu_idx: int, searcher) -> List[QAExample]:
+    query_embeds, original_dataset = _worker_encode_queries(gpu_idx)
     query_ids = [ex['id'] for ex in original_dataset]
     assert len(query_embeds) == len(original_dataset), "Length of query_embeds and original_dataset should be same"
     
@@ -205,7 +206,6 @@ def save_to_json(dataset: List[QAExample], output_path: str):
 
 def get_ivf_index(
         cpu_index,
-        logger,
         metric: str = "ip",
         train_size: int = 2_560_000, # 샘플 학습 크기 (최대 100만 권장)
         train_bs: int = 100_000,     # train 벡터 준비 배치 크기
@@ -271,7 +271,7 @@ def get_ivf_index(
 
 
 def retrieve_documents():
-    logger = setup_logger("search_document", args.encode_save_dir)
+    setup_logger("search_document", args.encode_save_dir)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(args))
 
@@ -297,31 +297,3 @@ def retrieve_documents():
 
 if __name__ == "__main__":
     retrieve_documents()
-
-
-# GPU 옵션 설정
-# res0 = faiss.StandardGpuResources()
-# res0.setTempMemory(512 * 1024 * 1024)  # 512MB만 임시 워크스페이스로 사용
-# res1 = faiss.StandardGpuResources()
-# res1.setTempMemory(512 * 1024 * 1024)  # 512MB만 임시 워크스페이스로 사용
-
-# # GpuResource 설정
-# resources = faiss.GpuResourcesVector()
-# resources.push_back(res0)
-# resources.push_back(res1)
-
-# # GPU 디바이스 설정
-# devices = faiss.Int32Vector()
-# devices.push_back(0)
-# devices.push_back(1)
-
-# co = faiss.GpuMultipleClonerOptions()
-# co.useFloat16 = True  # FP16로 메모리/속도 최적화 (정확도 영향 매우 미미)
-# co.shard=True
-
-# # CPU 인덱스를 모든 GPU에 올리기
-# gpu_index = faiss.index_cpu_to_gpu_multiple(resources, devices, ivf_index, options=co)
-# # gpu_index = faiss.index_cpu_to_all_gpus(cpu_index, co=co, resources=[res, res])
-# # GPU 인덱스로 검색기 생성
-# searcher = FaissSearcher(None, None)
-# searcher.index = gpu_index

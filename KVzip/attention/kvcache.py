@@ -12,9 +12,7 @@ from tiny_api_cuda import update_flatten_view
 
 
 class EvictCache(DynamicCache, KVScore):
-    """ KV cache that evicts KV from the cache before decoding.
-    """
-
+    """ KV cache that evicts KV from the cache before decoding."""
     def __init__(self, model, evict_range: Tuple[int, int]):
         DynamicCache.__init__(self)
         self.device = next(model.parameters()).device
@@ -32,6 +30,8 @@ class EvictCache(DynamicCache, KVScore):
 
         self.get_score = False  # indicator for KV scoring
         self.pruned = False  # whether KV cache is pruned or not
+        self.log_probs = None   # store log probs during prefilling stage
+        self.noun_mask = None  # mask for noun tokens during prefilling stage
 
         self.valid_pad = torch.ones((1, self.n_heads_kv, self.start_idx),
                                     dtype=bool,
@@ -137,7 +137,7 @@ class EvictCache(DynamicCache, KVScore):
 
         rmv = (self.valid == False).float()  # evicted KV pairs
         r_ = 1 - rmv.mean().item()  # real compression ratio
-        self.prepare_init()
+        # self.prepare_init()       # This will be called later
         self.pruned = True
         # print(f"ratio {r_:.2f} ({level}), {self._mem()} GB (evict {rmv.sum():.0f} pairs)")
         return thres, r_
@@ -236,6 +236,19 @@ class EvictCache(DynamicCache, KVScore):
         Merge multiple EvictCache instances into a single EvictCache.
         """
         raise NotImplementedError
+    
+    def register_log_probs(self, logits: torch.Tensor):
+        """
+        Store log probabilities during prefilling stage.
+        """
+        ctx_logits = logits[:, self.start_idx-1:self.end_idx-1, :]  # Extract context logits
+        log_probs = torch.log_softmax(ctx_logits, dim=-1)
+        target_log_probs = torch.gather(
+            log_probs,
+            dim=-1,
+            index=self.ctx_ids.unsqueeze(-1)
+        ).squeeze(-1)
+        self.log_probs = target_log_probs   # (B, L)
 
 
 class RetainCache(DynamicCache, KVScore):

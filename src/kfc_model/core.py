@@ -14,18 +14,21 @@ from utils import CtxExample, CtxsRelevance, template
 
 from .conflict_resources import *
 from .conflict_handler import ConflictConfigHandler
-from .lexical_keeper import LexicalKeeper
+from .lexical_cue import LexicalCueEmbedder
+
+logger = logging.getLogger(__name__)
 
 class KnowledgeFusionCore:
-    def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
+    def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str) -> None:
         self.config: DictConfig = config
         self._kvzip: ModelKVzip = kvzip
         self.generate_prompt: str = generate_prompt
         self.base_prompt: str = base_prompt
-        self.logger: logging.Logger = logger
         self.model_name: str = config.model.model_name
 
-        self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config, logger)
+        # Another core components
+        self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config)
+        self.lex_cue_embedder = LexicalCueEmbedder(config.model.lexical_cue, self.conflict_handler)
         self.__post_init__()
     
     def set_base_chat_template(self, task: str = "qa"):
@@ -76,7 +79,7 @@ class KnowledgeFusionCore:
         a_ids: torch.Tensor,
         relevance_map: CtxsRelevance,
         prune_ratio: float,
-    ) -> List[CtxExample]:
+    ) -> List[Tuple[str, EvictCache]]:
         evicted_kvs = []
 
         for ctx_idx, ctx_ex in enumerate(contexts):
@@ -84,18 +87,16 @@ class KnowledgeFusionCore:
             try:
                 relevance = relevance_map[ctx_idx]
             except KeyError:
-                self.logger.error(f"Context index {ctx_idx} not found in relevance map.")
+                logger.error(f"Context index {ctx_idx} not found in relevance map.")
                 relevance = "irrelevant"
 
             # Case 1 - Irrelevant context
             if relevance == "irrelevant":
-                kv = None    # Skip
-                evicted_kvs.append(kv)
                 continue
             # Case 2 - Conflict context
             else:
-                prune_map = self.conflict_handler.normal_map if relevance == "negative"\
-                                else self.conflict_handler.critical_map
+                prune_map = self.conflict_handler.critical_map if relevance == "negative"\
+                                else self.conflict_handler.normal_map
                 kv = self.prefill(
                     ctx_ids=context,
                     q_ids=q_ids,
@@ -106,7 +107,7 @@ class KnowledgeFusionCore:
                     prune_kwargs=prune_map,
                     prune_type=relevance
                 )
-                evicted_kvs.append(kv)
+                evicted_kvs.append((relevance, kv))
         
         return evicted_kvs
     
@@ -124,14 +125,21 @@ class KnowledgeFusionCore:
         a_ids = self._kvzip.encode(internal_answer) if isinstance(internal_answer, str) else internal_answer
         
         relevance_map = relevance.mapping
-        all_kv = self.get_evicted_kvs(
+        tagged_all_kv = self.get_evicted_kvs(
             contexts,
             q_ids=q_ids,
             a_ids=a_ids,
             relevance_map=relevance_map,
             prune_ratio=self.config.model.prune.ratio,
         )
-        
+        # Lexical cue embedding
+        all_kv = self.lex_cue_embedder.embed_lexical_cues(tagged_all_kv)
+        # if isinstance(tagged_all_kv[0], tuple):
+            # all_kv = []
+            # for tagged_kv in tagged_all_kv:
+                # all_kv.append(tagged_kv[1])
+
+
         # KV cache merge strategy
         # Use only single context (temporary)
         merged_kv = None

@@ -1,6 +1,6 @@
 import json
 
-SUMMARY_PATH = "results/main/e2e_openai/ratio=0.3_prompt=base/20251222_030802/inference_summary.txt"
+SUMMARY_PATH = "results/main/e2e_openai/ratio=0.3_prompt=base/20260119_072530/inference_summary.txt"
 with open(SUMMARY_PATH, 'r') as f:
     data = json.load(f)
 

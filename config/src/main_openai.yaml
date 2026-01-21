@@ -14,10 +14,16 @@ model:
   prune:
     ratio: 0.3
     alt_prune_ratio: 0.1
+  ### Conflict Configuration
   conflict_topk: 100
   control_metadata:
     stats_path: experiments/cache_stats/kv_cache_control_stats.json
     layer_info_path: experiments/cache_stats/conflict_layer_info.json
+  ### Lexical Cue Generator
+  lexical_cue:
+    n_tokens: 30
+    est_strategy: log_prob  # This can be (`log_prob`, `max_norm`, `induction_head`)
+    filling_strategy: mean  # KV Cache hidden states filling strategy
 
 judger:
   llm_model_name: gpt-4o-mini

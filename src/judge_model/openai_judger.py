@@ -4,8 +4,12 @@ import os
 import sqlite3
 import json
 import hashlib
+import logging
 from pathlib import Path
 from omegaconf import DictConfig
+
+
+logger = logging.getLogger(__name__)
 
 from utils import CtxExample
 from .llm_judger import LLMJudger, JudgeOutput, CtxsRelevance
@@ -123,3 +127,37 @@ class OpenAIJudger(LLMJudger):
     
     def get_total_cost(self) -> float:
         return self.total_cost
+    
+    def export_sqlite_to_json(self):
+        output_json_path = self.cache_path.with_suffix('.json')
+        
+        with sqlite3.connect(self.cache_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, data FROM cache") # 순서: 0번 key, 1번 data
+            rows = cursor.fetchall()
+
+            validated_list = []
+
+            for row in rows:
+                # ★ 여기가 핵심 수정 사항입니다 ★
+                # row[0]은 key(해시값), row[1]이 data(JSON)입니다.
+                key, data_str = row 
+
+                try:
+                    # 해시값(key)이 아니라 데이터(data_str)를 파싱해야 합니다.
+                    raw_dict = json.loads(data_str)
+                    
+                    # Pydantic 검증 및 변환
+                    pydantic_obj = JudgeOutput.model_validate(raw_dict)
+                    clean_dict = pydantic_obj.model_dump(mode='json')
+                    
+                    validated_list.append(clean_dict)
+
+                except Exception as e:
+                    print(f"⚠️ 에러 발생 (Key: {key}): {e}")
+
+            # 저장
+            with open(output_json_path, 'w', encoding='utf-8') as f:
+                json.dump(validated_list, f, ensure_ascii=False, indent=4)
+                
+            print(f"성공! {len(validated_list)}개의 데이터를 복구했습니다.")

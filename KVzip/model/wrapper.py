@@ -4,6 +4,9 @@
 # ------------------------------------------------------------------------------
 import torch
 import glob
+import spacy
+import logging
+import numpy as np
 from typing import List, Tuple, Union, Optional
 from tqdm import tqdm
 from transformers import DynamicCache, Gemma3ForCausalLM, Qwen3ForCausalLM
@@ -13,6 +16,8 @@ from utils.func import inplace_softmax
 from model.load import load_model
 from model.quant_model import OptimINT4KVCache, LlamaForCausalLMW8A8
 from model.template import template
+
+logger = logging.getLogger(__name__)
 
 
 def chunk_fn(ctx_ids: torch.Tensor, chunk_size: int) -> List[torch.Tensor]:
@@ -59,7 +64,7 @@ def load_head_score(model_name, ctx_len):
 
 
 class ModelKVzip():
-    def __init__(self, model_name: str, kv_type: str = "evict", gen_kwargs: dict = None, prompt: str = "", logger=None):
+    def __init__(self, model_name: str, kv_type: str = "evict", gen_kwargs: dict = None, prompt: str = ""):
         self.model, self.tokenizer = load_model(model_name)
 
         self.name = self.model.name
@@ -68,7 +73,6 @@ class ModelKVzip():
         self.config = self.model.config
         self.prompt = prompt    # Prompt for KV scoring
         self.raw_score = None
-        self.logger = logger
 
         if isinstance(self.model, LlamaForCausalLMW8A8):
             self.kv_type = "int4static"
@@ -97,6 +101,7 @@ class ModelKVzip():
             self.gen_kwargs["eos_token_id"] = 151645
 
         self.set_chat_template()
+        self.nlp = spacy.load("en_core_web_sm", disable=["parser", "ner", "lemmatizer", "textcat"])
 
     def encode(self, text: str) -> torch.Tensor:
         """ Encode text into tokens
@@ -125,6 +130,7 @@ class ModelKVzip():
         kv: Union[RetainCache, EvictCache],
         update_cache: bool = False,
         return_logits: bool = False,
+        return_outputs: bool = False,
         *args,
         **kwargs,
     ):
@@ -136,12 +142,14 @@ class ModelKVzip():
 
         if isinstance(kv, RetainHybridCache) and not update_cache:
             kv.backup_sliding_cache()
-
+        
         if return_logits:
             outputs = self.model(input_ids, past_key_values=kv, *args, **kwargs)
         else:
-            _ = self.model.model(input_ids, past_key_values=kv, *args, **kwargs)
-            outputs = None
+            ### New line
+            outputs = self.model.model(input_ids, past_key_values=kv, *args, **kwargs)
+            if not return_outputs:
+                outputs = None
 
         if not update_cache:
             kv.slice(seen_token_prev)
@@ -182,17 +190,22 @@ class ModelKVzip():
         """ Chunked prefill KV cache
         """
         if type(ctx_ids) == str:
-            ctx_ids = self.encode(ctx_ids)
+            tokenized = self.tokenizer(ctx_ids, return_tensors="pt", return_offsets_mapping=True).to(self.device)
+            ctx_ids = tokenized['input_ids']
+            ctx_offsets = tokenized['offset_mapping']
         prefill_ids = torch.cat([self.sys_prompt_ids, ctx_ids], dim=1)
         evict_range = (self.sys_prompt_ids.shape[1], prefill_ids.shape[1])
 
         kv = self._init_kv(evict_range=evict_range)  # do not evict system prompt KV
         kv.ctx_ids = ctx_ids
         kv.prefill_ids = prefill_ids
+        kv.noun_mask = self.noun_masking(kv, ctx_offsets)   ### New line
 
-        # prefill
+        # prefill, get logits at this stage
         for input_ids in tqdm(chunk_fn(prefill_ids, prefill_chunk_size), desc="Prefill", disable=True):
-            self.__call__(input_ids, kv, update_cache=True)
+            outputs = self.__call__(input_ids, kv, update_cache=True, return_outputs=True)
+            logits = self.model.lm_head(outputs.last_hidden_state)
+            kv.register_log_probs(logits)   ### New method
         if do_score:
             # KV importance scoring
             if a_ids is None:
@@ -251,10 +264,10 @@ class ModelKVzip():
             kv.end_idx = 0
             input_ids = self.self_task(ctx_ids, q_ids, a_ids)
             # Log input ids for debugging
-            # self.logger.info(f"Input ids (Context):\n{self.tokenizer.decode(input_ids[0][0][0])}")
-            # self.logger.info(f"Context shape: {input_ids[0][0][0].shape}")
-            # self.logger.info(f"Input ids (Full ids):\n{self.tokenizer.decode(input_ids[0][1][0])}")
-            # self.logger.info(f"Full input shape: {input_ids[0][1][0].shape}")
+            # logger.info(f"Input ids (Context):\n{self.tokenizer.decode(input_ids[0][0][0])}")
+            # logger.info(f"Context shape: {input_ids[0][0][0].shape}")
+            # logger.info(f"Input ids (Full ids):\n{self.tokenizer.decode(input_ids[0][1][0])}")
+            # logger.info(f"Full input shape: {input_ids[0][1][0].shape}")
             for i, (prefill_ids_p,
                     repeat_ids_p) in enumerate(tqdm(input_ids, desc=f"Importance scoring", disable=True)):
                 kv.end_idx = kv.start_idx + prefill_ids_p.shape[1]  # indices for a chunk
@@ -323,3 +336,37 @@ class ModelKVzip():
         if device == "cpu":
             return output.cpu()
         return output
+
+    def noun_masking(self, kv: Union[RetainCache, EvictCache], offset_mapping: List[List[Tuple[int, int]]]) -> torch.Tensor:
+        """
+        Obtain noun token mask from the tokenizer
+        Args:
+            kv: EvictCache object containing ctx_ids
+            offset_mapping: (batch_size, seq_len, 2), (start_offset, end_offset)
+        Returns:
+            noun_mask: (batch_size, seq_len) boolean tensor indicating noun tokens
+        """
+        B, L = kv.ctx_ids.shape
+        texts = self.tokenizer.batch_decode(kv.ctx_ids, skip_special_tokens=True)
+
+        noun_mask = torch.zeros((B, L), dtype=torch.bool, device=kv.ctx_ids.device)
+        docs = list(self.nlp.pipe(texts)) # (B,)
+        for b, doc in enumerate(docs):
+            text_len = len(texts[b])
+            current_offsets = offset_mapping[b]
+
+            char_bitmap = np.zeros(text_len + 1, dtype=bool)
+            
+            for token in doc:
+                if token.pos_ in ["NOUN", "PROPN"]:
+                    char_bitmap[token.idx:token.idx+len(token)] = True
+            
+            # Map char-level bitmap to token-level mask
+            for i, (start, end) in enumerate(current_offsets):
+                if start == end: continue
+                subword_len = end - start
+                if subword_len > 0:
+                    overlap_count = np.sum(char_bitmap[start:end])
+                    if overlap_count > (subword_len / 2):
+                        noun_mask[b, i] = True
+        return noun_mask

@@ -18,6 +18,7 @@ from utils import (
     MetricResult, RelevanceQAExample
 )
 
+logger = logging.getLogger(__name__)
 
 class InferenceResult(BaseModel):
     id: int
@@ -34,7 +35,6 @@ def run_inference(
     kfc: KnowledgeFusionCore,
     llm_judger: LLMJudger,
     data: List[RelevanceQAExample],
-    logger,
 ) -> Dict[str, List[InferenceResult]]:
     inference_cases = ["param_true", "param_positive", "param_negative", "param_irrelevant", "param_multiple"]
     results = {infer_case: [] for infer_case in inference_cases}
@@ -115,7 +115,6 @@ def run_inference(
 def validate_and_save_results(
     results: Dict[str, List[InferenceResult]],
     output_dir: str,
-    logger: logging.Logger,
 ) -> None:
     summary_path = f"{output_dir}/inference_summary.txt"
     all_results_path = f"{output_dir}/inference_results.json"
@@ -156,7 +155,7 @@ def main():
 
     expriment_name = f"ratio={config.model.prune.ratio}_prompt={config.generate_prompt_name}"
     config.output_dir = os.path.join(config.output_dir, expriment_name, cur_time)
-    logger = setup_logger(f"main_{cur_time}", config.output_dir)
+    setup_logger(f"main_{cur_time}", config.output_dir)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(config))
 
@@ -180,13 +179,13 @@ def main():
 
     # Load data
     data = load_relevance_dataset(config.data.data_path)
-    data = data[:100]   # debug
+    # data = data[:100]   # debug
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model
     kvzip = ModelKVzip(config.model.model_name, gen_kwargs=config.model.gen_kwargs, prompt=repeat_prompt)
     logger.info(f"Model {config.model.model_name} initialized.")
-    kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, base_prompt, logger)
+    kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, base_prompt)
     logger.info("Knowledge Fusion Core initialized.")
 
     if config.judger.use_openai:
@@ -194,8 +193,8 @@ def main():
     else:
         judger: LLMJudger = HfLLMJudger(config.judger)
 
-    inference_result = run_inference(config, kfc, judger, data, logger)
-    validate_and_save_results(inference_result, config.output_dir, logger)
+    inference_result = run_inference(config, kfc, judger, data)
+    validate_and_save_results(inference_result, config.output_dir)
 
 if __name__ == "__main__":
     main()

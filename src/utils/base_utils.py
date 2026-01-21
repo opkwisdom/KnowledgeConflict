@@ -23,13 +23,16 @@ def load_config() -> DictConfig:
     return config
 
 
-def setup_logger(name, log_dir: str, level=logging.INFO) -> logging.Logger:
+def setup_logger(name, log_dir: str, level=logging.INFO) -> None:
     """Function to setup a logger; creates file and console handlers."""
     os.makedirs(log_dir, exist_ok=True)
     log_file = f"{log_dir}/{name}.log"
     
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
 
     # File handler
     fh = logging.FileHandler(log_file)
@@ -45,10 +48,13 @@ def setup_logger(name, log_dir: str, level=logging.INFO) -> logging.Logger:
     ch.setFormatter(formatter)
 
     # Add handlers to logger
-    logger.addHandler(fh)
-    logger.addHandler(ch)
+    root_logger.addHandler(fh)
+    root_logger.addHandler(ch)
 
-    return logger
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 def set_seed(seed: int):
     """Sets the seed for reproducibility."""

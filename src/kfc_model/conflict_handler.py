@@ -6,11 +6,12 @@ from transformers import LlamaConfig, AutoConfig
 
 from .conflict_resources import *
 
+logger = logging.getLogger(__name__)
+
 class ConflictConfigHandler:
-    def __init__(self, config: DictConfig, model_config: AutoConfig, logger: logging.Logger) -> None:
+    def __init__(self, config: DictConfig, model_config: AutoConfig) -> None:
         self.config = config
         self.model_config = model_config
-        self.logger = logger
         self.critical_map, self.normal_map = self._setup_indices()
         self.control_cache_stats, self.selected_d = self._load_control_stats()
 
@@ -55,7 +56,7 @@ class ConflictConfigHandler:
             critical_map, normal_map = self._parse_critical_indices(critical_indices)
         else:
             critical_map, normal_map = {}, {}
-            self.logger.warning("No critical indices found for the model.")
+            logger.warning("No critical indices found for the model.")
 
         return critical_map, normal_map
 
@@ -79,7 +80,7 @@ class ConflictConfigHandler:
             }
         else:
             control_cache_stats = None
-            self.logger.warning("No control cache stats path provided.")
+            logger.warning("No control cache stats path provided.")
 
         if control_layer_info_path:
             with open(control_layer_info_path, "r") as f:
@@ -90,6 +91,6 @@ class ConflictConfigHandler:
             }
         else:
             selected_d = None
-            self.logger.warning("No conflict layer info path provided.")
+            logger.warning("No conflict layer info path provided.")
 
         return control_cache_stats, selected_d
