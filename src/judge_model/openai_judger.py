@@ -24,6 +24,7 @@ class OpenAIJudger(LLMJudger):
     def __init__(self, config: DictConfig):
         super().__init__(config)
         self.prompt = self.set_prompt(config.prompt_name)
+        print(self.prompt)
         self.total_cost = 0.0
         self.llm_model_name = config.llm_model_name
         self.use_cache = config.use_cache
@@ -59,16 +60,16 @@ class OpenAIJudger(LLMJudger):
         return hashlib.sha256(unique_str.encode("utf-8")).hexdigest()
 
     def set_prompt(self, prompt: str):
-        return OPENAI.get(prompt, OPENAI["base"])
+        return OPENAI.get(prompt, OPENAI["single_context_eval"])
 
     def judge(self, query: str, answer: str, contexts: List[CtxExample]) -> JudgeOutput:
         # Prepare the input prompt
-        if( len(contexts) > 1):
+        if(len(contexts) > 1):
             formatted_ctx = "\n".join([f"[{i}]\nTitle: {ctx.title}\n\n{ctx.text}\n" for i, ctx in enumerate(contexts)])
         else:
             single_ctx = contexts[0]
-            formatted_ctx = f"[0]\nTitle: {single_ctx.title}\n\n{single_ctx.text}"
-        
+            formatted_ctx = f"\nTitle: {single_ctx.title}\n\n{single_ctx.text}"
+        # print(formatted_ctx)
         format_args = {
             "query": query,
             "internal_answer": answer,

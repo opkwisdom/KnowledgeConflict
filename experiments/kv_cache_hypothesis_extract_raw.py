@@ -139,7 +139,7 @@ def detect_conflict_pseudo_passage(
     return sample_topk_diff_scores, pseudo_passage, is_correct
 
 
-def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_dir: str, generate_prompt: str = None, logger = None):
+def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_dir: str, generate_prompt: str = None, logger = None, psg_num: int = 0):
     case_num = 0
 
     test_results = {
@@ -202,7 +202,7 @@ def test_hypothesis(config: DictConfig, model: ModelKVzip, data: list, output_di
     for key, lst in test_results.items():
         logger.info(f"{key}: {len(lst)} examples")
     
-    output_path = os.path.join(output_dir, f"kv_cache_hypothesis_test_results.pkl")
+    output_path = os.path.join(output_dir, f"kv_cache_hypothesis_test_results_{psg_num}.pkl")
     with open(output_path, 'wb') as f:
         pickle.dump(test_results, f)
     logger.info(f"Saved test results to {output_path}")

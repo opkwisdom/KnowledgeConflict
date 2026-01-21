@@ -11,7 +11,10 @@ import json
 from KVzip.model import ModelKVzip
 from KVzip.attention import RetainCache, EvictCache
 from utils import CtxExample, CtxsRelevance, template
+
 from .conflict_resources import *
+from .conflict_handler import ConflictConfigHandler
+from .lexical_cue import LexicalCueEmbedder
 
 class KnowledgeFusionCore:
     def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
@@ -21,6 +24,10 @@ class KnowledgeFusionCore:
         self.base_prompt: str = base_prompt
         self.logger: logging.Logger = logger
         self.model_name: str = config.model.model_name
+
+        # Another core components
+        self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config)
+        # self.lex_cue_embedder = LexicalCueEmbedder(config.model.lexical_cue, self.conflict_handler)
         self.__post_init__()
     
     def set_base_chat_template(self, task: str = "qa"):
@@ -60,50 +67,7 @@ class KnowledgeFusionCore:
         return critical_map, normal_map
     
     def __post_init__(self):
-        # init conflict
-        critical_indices = None
-        if isinstance(self.model.config, LlamaConfig):
-            critical_indices = LLAMA_CRITICAL_INDICES
-            self.selected_layers = LLAMA_CRITICAL_INDICES
-
-        if critical_indices:
-            self.critical_map, self.normal_map = self._parse_critical_indices(critical_indices)
-        else:
-            self.critical_map, self.normal_map = {}, {}
-            self.logger.warning("No critical indices found for the model.")
-        
         self.set_base_chat_template()
-        
-        # control cache stats
-        control_metadata = self.config.model.get("control_metadata", None)
-        control_cache_path = control_metadata.get("stats_path", None)
-        control_layer_info_path = control_metadata.get("layer_info_path", None)
-
-        if control_cache_path:
-            with open(control_cache_path, "r") as f:
-                control_cache_stats = json.load(f)
-            control_cache_stats = control_cache_stats["control_stat"]
-            self.control_cache_stats = {
-                int(idx): {
-                    "mean": control_cache_stats[int(idx)]["mean"],
-                    "std": control_cache_stats[int(idx)]["std"],
-                }
-                for idx in self.selected_layers
-            }
-        else:
-            self.control_cache_stats = None
-            self.logger.warning("No control cache stats path provided.")
-
-        if control_layer_info_path:
-            with open(control_layer_info_path, "r") as f:
-                conflict_layer_info = json.load(f)
-            self.selected_d = {
-                int(idx): conflict_layer_info["sorted_scores"]["mean_d"][i]
-                for i, idx in enumerate(self.selected_layers)
-            }
-        else:
-            self.selected_d = None
-            self.logger.warning("No conflict layer info path provided.")
 
     # For user convenience access
     @property
@@ -145,7 +109,7 @@ class KnowledgeFusionCore:
         a_ids: torch.Tensor,
         relevance_map: CtxsRelevance,
         prune_ratio: float,
-    ) -> List[CtxExample]:
+    ) -> List[EvictCache]:
         evicted_kvs = []
 
         for ctx_idx, ctx_ex in enumerate(contexts):
@@ -156,37 +120,24 @@ class KnowledgeFusionCore:
                 self.logger.error(f"Context index {ctx_idx} not found in relevance map.")
                 relevance = "irrelevant"
 
-            # Case 2a - Context is relevant
-            if relevance == "positive":
-                kv = self.prefill(
-                    ctx_ids=context,
-                    q_ids=q_ids,
-                    a_ids=a_ids,
-                )
-                kv.prune(
-                    ratio=prune_ratio,
-                    prune_kwargs=self.normal_map,
-                    prune_type=relevance
-                )
-                evicted_kvs.append(kv)
-            
-            # Case 2b - Context is negative
-            # TODO: Embed [THINK] token logic here
-            elif relevance == "negative":
-                kv = self.prefill(
-                    ctx_ids=context,
-                    q_ids=q_ids,
-                    a_ids=a_ids,
-                )
-                kv.prune(
-                    ratio=prune_ratio,
-                    prune_kwargs=self.critical_map,
-                    prune_type=relevance
-                )
-                evicted_kvs.append(kv)
-            # Case 2c - Context is irrelevant
+            # Case 1 - Irrelevant context
+            if relevance == "irrelevant":
+                continue
+            # Case 2 - Conflict context
             else:
-                kv = None    # Skip
+                prune_map = self.conflict_handler.critical_map if relevance == "negative"\
+                                else self.conflict_handler.normal_map
+                kv = self.prefill(
+                    ctx_ids=context,
+                    q_ids=q_ids,
+                    a_ids=a_ids,
+                )
+                kv.prune(
+                    ratio=prune_ratio,
+                    prune_kwargs=prune_map,
+                    prune_type=relevance
+                )
+                # evicted_kvs.append((relevance, kv))
                 evicted_kvs.append(kv)
         
         return evicted_kvs
@@ -212,7 +163,13 @@ class KnowledgeFusionCore:
             relevance_map=relevance_map,
             prune_ratio=self.config.model.prune.ratio,
         )
-        
+        # Lexical cue embedding
+        # all_kv = self.lex_cue_embedder.embed_lexical_cues(tagged_all_kv)
+        # if isinstance(tagged_all_kv[0], tuple):
+            # all_kv = []
+            # for tagged_kv in tagged_all_kv:
+                # all_kv.append(tagged_kv[1])
+
         # KV cache merge strategy
         # Use only single context (temporary)
         merged_kv = None
@@ -271,8 +228,8 @@ class KnowledgeFusionCore:
 
             is_rel, _ = kv.validate_relevance(
                 topk=self.config.model.conflict_topk,
-                control_cache_stats=self.control_cache_stats,
-                control_d=self.selected_d
+                control_cache_stats=self.conflict_handler.control_cache_stats,
+                control_d=self.conflict_handler.selected_d
             )
             if is_rel:
                 relevant_contexts.append(ctx_ex)

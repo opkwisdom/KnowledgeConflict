@@ -11,7 +11,7 @@ import os
 
 from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
-from judge_model import LLMJudger, OpenAIJudger, HfLLMJudger, JudgeOutput, CtxsRelevance
+from judge_model import CtxsRelevance
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
 from utils import (
     setup_logger, load_config, load_relevance_dataset, compute_metrics,
@@ -32,13 +32,12 @@ class InferenceResult(BaseModel):
 def run_inference(
     config: DictConfig,
     kfc: KnowledgeFusionCore,
-    llm_judger: LLMJudger,
     data: List[RelevanceQAExample],
     logger,
 ) -> Dict[str, List[InferenceResult]]:
-    inference_cases = ["param_true", "param_positive", "param_negative", "param_irrelevant", "param_multiple"]
+    inference_cases = ["param_relevant", "param_irrelevant", "param_multiple"]
     results = {infer_case: [] for infer_case in inference_cases}
-    for idx, item in tqdm(enumerate(data), desc="Running KFC Inference", total=len(data)):
+    for idx, item in tqdm(enumerate(data), desc="Running KFC Inference (No Judge)", total=len(data)):
         question = item.question
         a_internal = kfc.generate_internal_answer(question)
 
@@ -59,35 +58,12 @@ def run_inference(
                 answers=item.answers,
                 metrics=compute_metrics(a_internal, item.answers),
                 has_answer=item.ctxs[0].hasanswer,
-                # [수정됨] irrelevant 필드 제거. 둘 다 비어있으면 Irrelevant임.
-                ctx_class=CtxsRelevance(positive=[], negative=[]) 
+                ctx_class=CtxsRelevance(positive=[], negative=[0]),
             )
             results["param_irrelevant"].append(sample_result)
-            continue
-
-        # LLM Judging
-        judge_output: JudgeOutput = llm_judger.judge(
-            query=item.question,
-            answer=a_internal,
-            contexts=item.ctxs
-        )
-        item.ctx_relevance = judge_output.ctx_relevance     # Real-time LLM judged relevance
-        is_correct = judge_output.is_correct
-        
-        # Case 2 - Internal answer is correct
-        if is_correct:
-            sample_result = InferenceResult(
-                id=idx,
-                question=item.question,
-                pred_answer=a_internal,
-                answers=item.answers,
-                metrics=compute_metrics(a_internal, item.answers),
-                has_answer=item.ctxs[0].hasanswer,
-                ctx_class=judge_output.ctx_relevance
-            )
-            results["param_true"].append(sample_result)
-        # Case 3 - Internal answer is incorrect
+        # Case 2 - Relevant contexts
         else:
+            item.ctx_relevance = CtxsRelevance(positive=[0], negative=[])  # All relevant contexts
             # Facade pattern
             pred_answer, rel_type = kfc.resolve_and_generate(
                 query=item.question,
@@ -96,7 +72,6 @@ def run_inference(
                 internal_answer=a_internal,
                 use_single_context=True,    # Temporary
             )
-
             sample_result = InferenceResult(
                 id=idx,
                 question=item.question,
@@ -104,11 +79,10 @@ def run_inference(
                 answers=item.answers,
                 metrics=compute_metrics(pred_answer, item.answers),
                 has_answer=item.ctxs[0].hasanswer,
-                ctx_class=judge_output.ctx_relevance
+                ctx_class=CtxsRelevance(positive=[0], negative=[]),
             )
-            results[f"param_{rel_type}"].append(sample_result)
+            results["param_relevant"].append(sample_result)
     logger.info("Inference completed.")
-    logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
 
     return results
 
@@ -189,12 +163,7 @@ def main():
     kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, base_prompt, logger)
     logger.info("Knowledge Fusion Core initialized.")
 
-    if config.judger.use_openai:
-        judger: LLMJudger = OpenAIJudger(config.judger)
-    else:
-        judger: LLMJudger = HfLLMJudger(config.judger)
-
-    inference_result = run_inference(config, kfc, judger, data, logger)
+    inference_result = run_inference(config, kfc, data, logger)
     validate_and_save_results(inference_result, config.output_dir, logger)
 
 if __name__ == "__main__":

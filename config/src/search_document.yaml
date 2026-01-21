@@ -1,16 +1,16 @@
 ### Input path
-data_dir: # Defined from the scripts
-input_file: # Defined from the scripts
+data_dir: /workspaces/kvzip_nlplab/KFC/data/nq/raw
+input_file: valid_with_id.jsonl # Defined from the scripts
 
 ### Output path
-encode_save_dir:  # Defined from the scripts
-ivf_dir: index
-output_path: # Defined from the scripts
+encode_save_dir: /workspaces/kvzip_nlplab/KFC/data/nq/retrieved_100 # Defined from the scripts
+ivf_dir: /workspaces/kvzip_nlplab/ivf_dir
+output_path: valid.jsonl # Defined from the scripts
 
 ### Running arguments
 base_model: castorini/ance-dpr-question-multi
 batch_size: 64
-search_topk: 10
+search_topk: 100
 dry_run: True
 q_max_len: 32
 dataloader_num_workers: 0

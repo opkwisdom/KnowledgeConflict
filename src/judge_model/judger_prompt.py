@@ -115,33 +115,70 @@ OPENAI = {
     },
     "single_context_eval": {
         "system": (
-            "You are an expert RAG Evaluator. "
-            "You will be given a Query, a single Retrieved Context, and an Internal Answer. "
-            "Your task is to classify the context's relevance and verify the answer's correctness."
+            "You are a Balanced Evaluator for a QA system. "
+            "Your goal is to validate the model's knowledge while strictly filtering context utility. "
+            "Favor the Internal Answer if it is factually grounded."
         ),
         "user": (
-            "### Task Description\n"
-            "1. **Classify Context**: Analyze the provided 'Retrieved Context' strictly based on the 'Query'.\n"
-            "   - **positive**: The context contains EXPLICIT information or strong clues to answer the query.\n"
-            "   - **negative** (Hard Negative): The context discusses the SAME entity/topic as the query but FAILS to provide the specific answer.\n"
-            "   - **irrelevant**: The context is about a different entity or completely unrelated.\n\n"
+            "### Task Overview\n"
+            "Evaluate the 'Internal Answer' and the single provided 'Context'.\n\n"
 
-            "2. **Verify Answer**: Determine if the 'Internal Answer' is factually correct based on the 'Query'.\n"
-            "   - Focus on the core entity/fact. Ignore verbosity or style issues.\n\n"
+            "### Step 1: Verify Internal Answer (Parametric Knowledge)\n"
+            "Does the 'Internal Answer' represent the correct entity or meaning for the 'Query'?\n"
+            "   - **is_correct**: Set to `true` if the answer is factually correct.\n"
+            "   - **Guideline**: Do NOT be pedantic. If the core fact is right (e.g., 'Jobs' instead of 'Steve Jobs'), accept it as `true`.\n\n"
+
+            "### Step 2: Classify Context Utility \n"
+            "Only mark the context as useful if it is undeniable.\n"
+            "   - **Positive**: The context contains the answer **EXPLICITLY** and **UNAMBIGUOUSLY**.\n"
+            "   - **Negative**: The context discusses the topic but does not contain the answer, or requires excessive guessing.\n\n"
 
             "### Input Data\n"
             "- Query: {query}\n"
-            "- Internal Answer: {internal_answer}\n\n"
-            "### Retrieved Context\n"
-            "{formatted_contexts}\n\n"
+            "- Internal Answer: {internal_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
 
-            "### Output Format\n"
-            "Provide the output in valid JSON format only.\n"
-            "{{\n"
-            "  \"reasoning\": \"Brief explanation...\",\n"
-            "  \"ctx_relevance\": [\"positive\"], \n" 
-            "  \"is_correct\": true\n"
-            "}}"
+            "### Output Requirement\n"
+            "Return valid JSON strictly adhering to the schema.\n"
+            "**Judge based on actual input.**\n"
+            "Example (Correct Internal Answer):\n"
+            "{{ \"is_correct\": true, \"ctx_relevance\": {{ \"positive\": [], \"negative\": [] }} }}"
+            "{{ \"is_correct\": false, \"ctx_relevance\": {{ \"positive\": [0], \"negative\": [] }} }}"
+            "{{ \"is_correct\": false, \"ctx_relevance\": {{ \"positive\": [], \"negative\": [0] }} }}"
+        )
+    },
+    "sce_modified": {
+        "system": (
+            "You are a Generous Evaluator for a QA system. "
+            "Your goal is to validate the model's knowledge while strictly filtering context utility. "
+            "Favor the Internal Answer if it is factually grounded."
+        ),
+        "user": (
+            "### Task Overview\n"
+            "Evaluate the 'Internal Answer' and the single provided 'Context'.\n\n"
+
+            "### Step 1: Verify Internal Answer (Parametric Knowledge)\n"
+            "Does the 'Internal Answer' represent the correct entity or meaning for the 'Query'?\n"
+            "   - **is_correct**: Set to `true` if the answer is factually correct.\n"
+            # "   - **Guideline**: Do NOT be pedantic. If the core fact is right (e.g., 'Jobs' instead of 'Steve Jobs'), accept it as `true`.\n\n"
+
+            "### Step 2: Classify Context Utility \n"
+            "Only mark the context as useful if it is undeniable.\n"
+            "   - **Positive**: The context contains the answer explicitly and unambiguously.\n"
+            "   - **Negative**: The context discusses the topic but does not contain the answer, or requires excessive guessing.\n\n"
+
+            "### Input Data\n"
+            "- Query: {query}\n"
+            "- Internal Answer: {internal_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+
+            "### Output Requirement\n"
+            "Return valid JSON strictly adhering to the schema.\n"
+            "**Judge based on actual input.**\n"
+            "Example (Correct Internal Answer):\n"
+            "{{ \"is_correct\": true, \"ctx_relevance\": {{ \"positive\": [], \"negative\": [] }} }}"
+            "{{ \"is_correct\": false, \"ctx_relevance\": {{ \"positive\": [0], \"negative\": [] }} }}"
+            "{{ \"is_correct\": false, \"ctx_relevance\": {{ \"positive\": [], \"negative\": [0] }} }}"
         )
     }
 }

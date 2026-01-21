@@ -1,1 +1,1 @@
-from .kfc import KnowledgeFusionCore
+from .core import KnowledgeFusionCore

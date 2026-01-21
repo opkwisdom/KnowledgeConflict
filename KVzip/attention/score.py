@@ -131,8 +131,17 @@ class KVScore():
                 pruned_score.append(valids)
                 thres_list.append(thres)
             else:
-                pruned_score.append(torch.ones_like(layer_score, dtype=bool))
-                thres_list.append(0)
+                # Always pruning
+                valids = torch.ones_like(layer_score, dtype=torch.bool)
+                # score_sort = torch.sort(layer_score.reshape(-1), descending=True).values
+                # n = max(int(len(score_sort) * ratio) - 1, 0)
+                # thres = score_sort[n].item()
+
+                # target_valids = (layer_score[:, target_heads] > thres).bool()
+                # valids[:, target_heads] = target_valids
+
+                pruned_score.append(valids)
+                thres_list.append(thres)
         
         pruned_kv = torch.stack(pruned_score, dim=0)    # (L, 1, H, N)
         # if ratio < 1:
@@ -188,7 +197,8 @@ class KVScore():
         x_mu = sample_topk_diff_scores.mean(dim=1)
         x_std = sample_topk_diff_scores.std(dim=1)
         
-        accept_ratio = 0
+        # accept_ratio = 0
+        accept_count = 0
         for layer_idx in d_layers:
             x = {
                 "mean": x_mu[layer_idx].item(),
@@ -197,13 +207,17 @@ class KVScore():
             y = control_cache_stats[layer_idx]
             d = cohens_d(x, y)
             if d >= control_d[layer_idx]:
-                accept_ratio += 1
-        accept_ratio /= len(d_layers)
+                accept_count += 1
+        accept_ratio = accept_count / len(d_layers)
 
         if accept_ratio >= 0.5:
             return True, accept_ratio
         else:
             return False, accept_ratio
+        # if accept_count:
+        #     return True, accept_count
+        # else:
+        #     return False, accept_count
 
 class HybridKVScore(KVScore):
 

@@ -1,6 +1,7 @@
 data:
   data_path: "data/nq/parametric_relevance_tagged/validation.json"
   max_seq_length: 1024
+  psg_num:
 
 
 model:

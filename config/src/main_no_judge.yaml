@@ -20,16 +20,14 @@ model:
   control_metadata:
     stats_path: experiments/cache_stats/kv_cache_control_stats.json
     layer_info_path: experiments/cache_stats/conflict_layer_info.json
-
-judger:
-  llm_model_name: gpt-4o-mini
-  prompt_name: sce_modified
-  cache_dir: src/cache_dir
-  use_cache: True # True
-  use_openai: True
+  ### Lexical Cue Generator
+  lexical_cue:
+    n_tokens: 3
+    est_strategy: log_prob  # This can be (`log_prob`, `max_norm`, `induction_head`)
+    filling_strategy: mean  # KV Cache hidden states filling strategy
 
 self_task_prompt_name: base
 generate_prompt_name: base
-output_dir: src/results/main/e2e_openai
+output_dir: src/results/main/no_judge
 task: base
 experiment_name:

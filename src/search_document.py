@@ -269,6 +269,10 @@ def get_ivf_index(
 
     return ivf
 
+def to_gpu(cpu_index: faiss.Index) -> faiss.Index:
+    co = faiss.GpuMultipleClonerOptions()
+    co.shard = True
+    return faiss.index_cpu_to_all_gpus(cpu_index, co=co)
 
 def retrieve_documents():
     logger = setup_logger("search_document", args.encode_save_dir)
@@ -284,10 +288,11 @@ def retrieve_documents():
     else:
         ivf_index = get_ivf_index(None, logger)
     # IVF 인덱스 변경
-    searcher.index = ivf_index
+    searcher.index = to_gpu(ivf_index)
 
     # Dry run만 구현함
-    all_dataset = _worker_batch_search(0, logger, searcher)
+    # all_dataset = _worker_batch_search(0, logger, searcher)
+    all_dataset = multi
     logger.info("Done batch search queries")
 
     output_path = os.path.join(args.encode_save_dir, args.output_path)
