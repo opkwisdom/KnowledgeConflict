@@ -1,5 +1,6 @@
 data:
-  data_path: data/nq/parametric_relevance_tagged/validation.json
+  name: triviaqa
+  data_path: data/triviaqa/retrieved/test.jsonl
   max_seq_length: 1024
   use_single_context: True
 

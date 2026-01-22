@@ -1,6 +1,7 @@
 data:
   data_path: "data/nq/parametric_relevance_tagged/validation.json"
   max_seq_length: 1024
+  psg_num:
 
 
 model:
@@ -15,7 +16,9 @@ model:
   prune:
     ratio: 0.3
 
-prompt_name: pseudo-passage-base
+prompt_name: base
+generate_prompt_name: base
 output_dir: experiments/hypo_test
-task: pseudo-passage
+task: base
 topk: 100
+do_answer: True

@@ -1,0 +1,33 @@
+data:
+  name: nq
+  data_path: data/nq/parametric_relevance_tagged/validation.json
+  max_seq_length: 1024
+  use_single_context: True
+
+model:
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+  ### Pruning options
+  prune:
+    ratio: 0.3
+  ### Filter irrelevant contexts
+  conflict_topk: 100
+  control_metadata:
+    stats_path: experiments/cache_stats/kv_cache_control_stats.json
+    layer_info_path: experiments/cache_stats/conflict_layer_info.json
+  ### Lexical Cue Generator
+  lexical_cue:
+    n_tokens: 3
+    est_strategy: log_prob  # This can be (`log_prob`, `max_norm`, `induction_head`)
+    filling_strategy: mean  # KV Cache hidden states filling strategy
+
+self_task_prompt_name: base
+generate_prompt_name: base
+output_dir: src/results/main/no_judge
+task: base
+experiment_name:

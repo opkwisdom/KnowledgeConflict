@@ -6,11 +6,15 @@ from transformers import (
     AutoModelForCausalLM, AutoTokenizer,
     LlamaConfig,
 )
+import json
 
 from KVzip.model import ModelKVzip
 from KVzip.attention import RetainCache, EvictCache
 from utils import CtxExample, CtxsRelevance, template
+
 from .conflict_resources import *
+from .conflict_handler import ConflictConfigHandler
+from .lexical_cue import LexicalCueEmbedder
 
 class KnowledgeFusionCore:
     def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
@@ -20,6 +24,10 @@ class KnowledgeFusionCore:
         self.base_prompt: str = base_prompt
         self.logger: logging.Logger = logger
         self.model_name: str = config.model.model_name
+
+        # Another core components
+        self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config)
+        # self.lex_cue_embedder = LexicalCueEmbedder(config.model.lexical_cue, self.conflict_handler)
         self.__post_init__()
     
     def set_base_chat_template(self, task: str = "qa"):
@@ -59,17 +67,6 @@ class KnowledgeFusionCore:
         return critical_map, normal_map
     
     def __post_init__(self):
-        # init conflict
-        critical_indices = None
-        if isinstance(self.model.config, LlamaConfig):
-            critical_indices = LLAMA_CRITICAL_INDICES
-        
-        if critical_indices:
-            self.critical_map, self.normal_map = self._parse_critical_indices(critical_indices)
-        else:
-            self.critical_map, self.normal_map = {}, {}
-            self.logger.warning("No critical indices found for the model.")
-        
         self.set_base_chat_template()
 
     # For user convenience access
@@ -112,7 +109,7 @@ class KnowledgeFusionCore:
         a_ids: torch.Tensor,
         relevance_map: CtxsRelevance,
         prune_ratio: float,
-    ) -> List[CtxExample]:
+    ) -> List[EvictCache]:
         evicted_kvs = []
 
         for ctx_idx, ctx_ex in enumerate(contexts):
@@ -123,37 +120,24 @@ class KnowledgeFusionCore:
                 self.logger.error(f"Context index {ctx_idx} not found in relevance map.")
                 relevance = "irrelevant"
 
-            # Case 2a - Context is relevant
-            if relevance == "positive":
-                kv = self.prefill(
-                    ctx_ids=context,
-                    q_ids=q_ids,
-                    a_ids=a_ids,
-                )
-                kv.prune(
-                    ratio=prune_ratio,
-                    prune_kwargs=self.normal_map,
-                    prune_type=relevance
-                )
-                evicted_kvs.append(kv)
-            
-            # Case 2b - Context is negative
-            # TODO: Embed [THINK] token logic here
-            elif relevance == "negative":
-                kv = self.prefill(
-                    ctx_ids=context,
-                    q_ids=q_ids,
-                    a_ids=a_ids,
-                )
-                kv.prune(
-                    ratio=prune_ratio,
-                    prune_kwargs=self.critical_map,
-                    prune_type=relevance
-                )
-                evicted_kvs.append(kv)
-            # Case 2c - Context is irrelevant
+            # Case 1 - Irrelevant context
+            if relevance == "irrelevant":
+                continue
+            # Case 2 - Conflict context
             else:
-                kv = None    # Skip
+                prune_map = self.conflict_handler.critical_map if relevance == "negative"\
+                                else self.conflict_handler.normal_map
+                kv = self.prefill(
+                    ctx_ids=context,
+                    q_ids=q_ids,
+                    a_ids=a_ids,
+                )
+                kv.prune(
+                    ratio=prune_ratio,
+                    prune_kwargs=prune_map,
+                    prune_type=relevance
+                )
+                # evicted_kvs.append((relevance, kv))
                 evicted_kvs.append(kv)
         
         return evicted_kvs
@@ -179,7 +163,13 @@ class KnowledgeFusionCore:
             relevance_map=relevance_map,
             prune_ratio=self.config.model.prune.ratio,
         )
-        
+        # Lexical cue embedding
+        # all_kv = self.lex_cue_embedder.embed_lexical_cues(tagged_all_kv)
+        # if isinstance(tagged_all_kv[0], tuple):
+            # all_kv = []
+            # for tagged_kv in tagged_all_kv:
+                # all_kv.append(tagged_kv[1])
+
         # KV cache merge strategy
         # Use only single context (temporary)
         merged_kv = None
@@ -215,6 +205,38 @@ class KnowledgeFusionCore:
         generated_text = self._kvzip.decode(gen_ids)
         
         return generated_text, final_rel_type, all_kv
+    
+    def filter_irrelevant_contexts(
+        self,
+        question: str,
+        internal_answer: str,
+        contexts: List[CtxExample]
+    ) -> Tuple[List[CtxExample], List[CtxExample]]:
+        relevant_contexts = []
+        irrelevant_contexts = []
+
+        for ctx_ex in contexts:
+            context = f"Title: {ctx_ex.title}\n\n{ctx_ex.text}"
+            kv = self.prefill(
+                ctx_ids=context,
+                q_ids=self._kvzip.encode(f"Question: {question}\n"),
+                a_ids=self._kvzip.encode(f"Answer: {internal_answer}\n"),
+                load_score=False,
+                do_score=True,
+            )
+            kv.to("cpu")
+
+            is_rel, _ = kv.validate_relevance(
+                topk=self.config.model.conflict_topk,
+                control_cache_stats=self.conflict_handler.control_cache_stats,
+                control_d=self.conflict_handler.selected_d
+            )
+            if is_rel:
+                relevant_contexts.append(ctx_ex)
+            else:
+                irrelevant_contexts.append(ctx_ex)
+        
+        return relevant_contexts, irrelevant_contexts
     
     @torch.inference_mode()
     def generate_internal_answer(

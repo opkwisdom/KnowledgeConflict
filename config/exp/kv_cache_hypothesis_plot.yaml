@@ -1,5 +1,5 @@
 data:
-  data_path: "experiments/hypo_test/pseudo-passage-base_raw/kv_cache_hypothesis_test_results.pkl"
+  data_path: "experiments/hypo_test/base_raw/20251219_113608/kv_cache_hypothesis_test_results.pkl"
   max_seq_length: 1024
 
 
@@ -15,7 +15,7 @@ model:
   prune:
     ratio: 0.3
 
-prompt_name: pseudo-passage-base
+prompt_name: base
 calc_type: raw
 output_dir: experiments/hypo_test_plot
 topk: 100

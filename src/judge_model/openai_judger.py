@@ -24,7 +24,7 @@ class OpenAIJudger(LLMJudger):
     def __init__(self, config: DictConfig):
         super().__init__(config)
         self.prompt = self.set_prompt(config.prompt_name)
-        
+        print(self.prompt)
         self.total_cost = 0.0
         self.llm_model_name = config.llm_model_name
         self.use_cache = config.use_cache
@@ -35,7 +35,7 @@ class OpenAIJudger(LLMJudger):
             self._init_db()
 
     def _init_llm(self):
-        self.client = OpenAI(api_key=os.getenv("JUNHO_OPENAI_API_KEY"))
+        self.client = OpenAI(api_key=os.getenv("NLPLAB_OPENAI_API_KEY"))
 
     def _init_db(self):
         with sqlite3.connect(self.cache_path) as conn:
@@ -60,18 +60,25 @@ class OpenAIJudger(LLMJudger):
         return hashlib.sha256(unique_str.encode("utf-8")).hexdigest()
 
     def set_prompt(self, prompt: str):
-        return OPENAI.get(prompt, OPENAI["base"])
+        return OPENAI.get(prompt, OPENAI["single_context_eval"])
 
     def judge(self, query: str, answer: str, contexts: List[CtxExample]) -> JudgeOutput:
         # Prepare the input prompt
-        formatted_ctx = "\n".join([f"[{i}]\nTitle: {ctx.title}\n\n{ctx.text}\n" for i, ctx in enumerate(contexts)])
-        
-        user_content = self.prompt["user"].format(
-            query=query,
-            internal_answer=answer,
-            formatted_contexts=formatted_ctx,
-            last_index=len(contexts)-1
-        )
+        if(len(contexts) > 1):
+            formatted_ctx = "\n".join([f"[{i}]\nTitle: {ctx.title}\n\n{ctx.text}\n" for i, ctx in enumerate(contexts)])
+        else:
+            single_ctx = contexts[0]
+            formatted_ctx = f"\nTitle: {single_ctx.title}\n\n{single_ctx.text}"
+        # print(formatted_ctx)
+        format_args = {
+            "query": query,
+            "internal_answer": answer,
+            "formatted_contexts": formatted_ctx,
+        }
+        if "single" not in self.config.prompt_name:
+            format_args["last_index"] = len(contexts) - 1
+
+        user_content = self.prompt["user"].format(**format_args)
         # Check cache
         cache_key = self._get_cache_key(user_content)
         if self.use_cache:
@@ -99,7 +106,7 @@ class OpenAIJudger(LLMJudger):
             self.total_cost += cost
 
             parsed_output = completion.choices[0].message.parsed
-
+            
             # Save to cache
             if self.use_cache:
                 json_str = parsed_output.model_dump_json()

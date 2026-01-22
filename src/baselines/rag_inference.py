@@ -11,7 +11,7 @@ import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, has_answer, compute_metrics, MetricResult,
+    load_config, setup_logger, load_relevance_dataset, load_qa_dataset, has_answer, compute_metrics, MetricResult,
     apply_template,
     RelevanceQAExample, CtxExample,
     InferenceResult,
@@ -129,14 +129,17 @@ def run_baseline_inference(
         gen_ids = outputs[:, input_ids.shape[1]:-1]
         pred_answer = tokenizer.decode(gen_ids[0])
 
-        metrics = compute_metrics(pred_answer, item.answers)
+        answers = item.answers
+        if isinstance(answers, dict):
+            answers = answers.get("aliases", None)  # TriviaQA format
+        metrics = compute_metrics(pred_answer, answers)
         
         # Construct result
         sample_result = InferenceResult(
             id=idx,
             question=item.question,
             pred_answer=pred_answer,
-            answers=item.answers,
+            answers=answers,
             metrics=metrics,
         )
         results[f"rag_result"].append(sample_result)
@@ -186,13 +189,18 @@ def main():
     cur_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     experiment_name = f"prompt={config.generate_prompt_name}"
-    config.output_dir = os.path.join(config.output_dir, experiment_name, cur_time)
+    output_dir = os.path.join(config.output_dir, config.data.name)  # Use data name from config
+    config.output_dir = os.path.join(output_dir, experiment_name, cur_time)
+    
     logger = setup_logger(f"rag_inference_{cur_time}", config.output_dir)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(config))
 
     # Load data
-    data = load_relevance_dataset(config.data.data_path)
+    if "nq" in config.data.data_path:
+        data = load_relevance_dataset(config.data.data_path)
+    else:
+        data = load_qa_dataset(config.data.data_path)
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model

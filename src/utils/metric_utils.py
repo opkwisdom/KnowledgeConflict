@@ -4,9 +4,9 @@ import regex
 from collections import Counter
 from typing import List
 from dataclasses import dataclass
+from pydantic import BaseModel
 
-@dataclass
-class MetricResult:
+class MetricResult(BaseModel):
     soft_em: bool
     recall: float
     precision: float
@@ -77,6 +77,9 @@ def has_answer(a_pred: str, a_true: List[str], tokenizer=SimpleTokenizer()) -> b
     """Check if a document contains an answer string."""
     a_pred = normalize_answer(a_pred)
     pred_tokens = tokenizer.tokenize(a_pred, uncased=True)
+
+    if isinstance(a_true, dict):
+        a_true = a_true["aliases"]  # TriviaQA
 
     for ans in a_true:
         ans = normalize_answer(ans)

@@ -63,9 +63,20 @@ def load_qa_dataset(data_path: str) -> List[QAExample]:
 
 def load_json_data(data_path: str):
     print(f"Loading data from {data_path}...")
-    with open(data_path, 'r') as f:
-        data = json.load(f)
-    return data
+    ext = os.path.splitext(data_path)[1]
+
+    if ext == '.jsonl':
+        data = []
+        with open(data_path, 'r') as f:
+            for line in f:
+                data.append(json.loads(line))
+        return data
+    elif ext == '.json':
+        with open(data_path, 'r') as f:
+            data = json.load(f)
+        return data
+    else:
+        raise ValueError(f"Unsupported file extension: {ext}")
 
 
 

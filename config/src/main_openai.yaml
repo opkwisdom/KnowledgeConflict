@@ -1,4 +1,5 @@
 data:
+  name: nq
   data_path: data/nq/parametric_relevance_tagged/validation.json
   max_seq_length: 1024
   use_single_context: True
@@ -11,14 +12,20 @@ model:
     top_p: 1
     top_k: null
     max_new_tokens: 32
+  ### Pruning options
   prune:
     ratio: 0.3
+  ### Filter irrelevant contexts
+  conflict_topk: 100
+  control_metadata:
+    stats_path: experiments/cache_stats/kv_cache_control_stats.json
+    layer_info_path: experiments/cache_stats/conflict_layer_info.json
 
 judger:
   llm_model_name: gpt-4o-mini
-  prompt_name: base
+  prompt_name: sce_modified
   cache_dir: src/cache_dir
-  use_cache: True
+  use_cache: True # True
   use_openai: True
 
 self_task_prompt_name: base
