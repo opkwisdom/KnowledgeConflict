@@ -180,7 +180,29 @@ OPENAI = {
             "{{ \"is_correct\": false, \"ctx_relevance\": {{ \"positive\": [0], \"negative\": [] }} }}"
             "{{ \"is_correct\": false, \"ctx_relevance\": {{ \"positive\": [], \"negative\": [0] }} }}"
         )
-    }
+    },
+    ### Judge prompts without internal answer
+    "judge_only_contexts": {
+        "system": (
+            "You are an extremely strict evaluator for a Retrieval-Augmented Generation (RAG) system.\n"
+            "Judge whether a provided Context contains sufficient information to answer a given Query.\n"
+        ),
+        "user": (
+            "### Task Description\n"
+            "Classifiy EACH context (from [0] to [{last_index}]) into one of three categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "1. **Positive**: The context contains the specific information to derive the answer literally. "
+            "Deduction or general knowledge is NOT allowed. The evidence must be present in the text.\n"
+            "2. **Negative (Broad Definition)**: Classify as Negative if the context shares ANY semantic relationship, keywords, or topic with the Query, "
+            "but it FAILS to provide the answer. This includes 'hard negatives', 'partial information' or 'outdated facts'.\n"
+            "3. **Irrelevant**: The context is unrelated to the Query, discusses a different entity, or is completely off-topic.\n\n"
+
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Provide the output strictly using the provided JSON schema."
+        )
+    },
 }
 
 

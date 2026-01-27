@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 from omegaconf import DictConfig
 
-from utils import CtxExample
+from src.utils import CtxExample
 from .llm_judger import LLMJudger, JudgeOutput, CtxsRelevance
 from .judger_prompt import OPENAI
 
@@ -28,7 +28,7 @@ class OpenAIJudger(LLMJudger):
         self.total_cost = 0.0
         self.llm_model_name = config.llm_model_name
         self.use_cache = config.use_cache
-        self.cache_path = Path(config.cache_dir) / "judge_cache.db"
+        self.cache_path = Path(config.cache_dir) / "judge_ctxs_cache.db"
 
         if self.use_cache:
             Path(config.cache_dir).mkdir(parents=True, exist_ok=True)
@@ -62,7 +62,7 @@ class OpenAIJudger(LLMJudger):
     def set_prompt(self, prompt: str):
         return OPENAI.get(prompt, OPENAI["single_context_eval"])
 
-    def judge(self, query: str, answer: str, contexts: List[CtxExample]) -> JudgeOutput:
+    def judge(self, query: str, answer: str, contexts: List[CtxExample]) -> CtxsRelevance:
         # Prepare the input prompt
         if(len(contexts) > 1):
             formatted_ctx = "\n".join([f"[{i}]\nTitle: {ctx.title}\n\n{ctx.text}\n" for i, ctx in enumerate(contexts)])
@@ -88,7 +88,7 @@ class OpenAIJudger(LLMJudger):
 
                 if row:
                     data = json.loads(row[0])
-                    cached_obj = JudgeOutput.model_validate(data)
+                    cached_obj = CtxsRelevance.model_validate(data)
                     return cached_obj
         try:
             completion = self.client.beta.chat.completions.parse(
@@ -97,7 +97,7 @@ class OpenAIJudger(LLMJudger):
                     {"role": "system", "content": self.prompt["system"]},
                     {"role": "user", "content": user_content}
                 ],
-                response_format=JudgeOutput,
+                response_format=CtxsRelevance,
                 temperature=0.0
             )
 

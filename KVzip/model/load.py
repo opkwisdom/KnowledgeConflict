@@ -54,11 +54,17 @@ def load_model(model_name: str, **kwargs):
             }
             config.max_position_embeddings = 131072
 
+        attn_type = kwargs.get("attn_type", None)
+        if attn_type is not None:
+            attn_implementation = attn_type
+        else:
+            attn_implementation = 'flash_attention_2'
+        
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
             torch_dtype="auto",
             device_map="auto",
-            attn_implementation='flash_attention_2',
+            attn_implementation=attn_implementation,
             config=config,
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id)

@@ -39,7 +39,17 @@ def run_inference(
     results = {infer_case: [] for infer_case in inference_cases}
     for idx, item in tqdm(enumerate(data), desc="Running KFC Inference (No Judge)", total=len(data)):
         question = item.question
-        a_internal = kfc.generate_internal_answer(question)
+        answers = item.answers
+        if isinstance(answers, dict):
+            answers = answers.get("aliases", None)  # TriviaQA format
+
+        a_internal = kfc.generate_internal_answer(question,
+                                                  return_probs=config.uncertainty_estimator.return_probs,
+                                                  inspect_mode=False)
+
+        boosted_prob_result = None
+        if isinstance(a_internal, tuple):
+            a_internal, boosted_prob_result = a_internal
 
         if idx == 0:
             logger.info(f"Sample Internal Answer: {a_internal}")
@@ -49,14 +59,14 @@ def run_inference(
             item.ctxs = [item.ctxs[0]]
         
         rel_ctxs, irr_ctxs =  kfc.filter_irrelevant_contexts(question, a_internal, item.ctxs)
-        # Case 1 - No relevant contexts
-        if not rel_ctxs:
+        # Case 1 - No relevant contexts or High Confidence
+        if not rel_ctxs or boosted_prob_result >= config.uncertainty_estimator.thres:
             sample_result = InferenceResult(
                 id=idx,
                 question=item.question,
                 pred_answer=a_internal,
-                answers=item.answers,
-                metrics=compute_metrics(a_internal, item.answers),
+                answers=answers,
+                metrics=compute_metrics(a_internal, answers),
                 has_answer=item.ctxs[0].hasanswer,
                 ctx_class=CtxsRelevance(positive=[], negative=[0]),
             )
@@ -76,8 +86,8 @@ def run_inference(
                 id=idx,
                 question=item.question,
                 pred_answer=pred_answer,
-                answers=item.answers,
-                metrics=compute_metrics(pred_answer, item.answers),
+                answers=answers,
+                metrics=compute_metrics(pred_answer, answers),
                 has_answer=item.ctxs[0].hasanswer,
                 ctx_class=CtxsRelevance(positive=[0], negative=[]),
             )

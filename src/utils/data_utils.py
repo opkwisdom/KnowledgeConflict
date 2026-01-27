@@ -2,6 +2,8 @@ from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional, Union
 import json
 import os
+import torch
+from pydantic import BaseModel, ConfigDict, field_serializer
 from tqdm import tqdm
 from datasets import load_dataset, DatasetDict
 
@@ -24,6 +26,8 @@ class QAExample:
     answers: List[str]
     num_answer: int
     parametric_answer: Optional[str] = None
+    is_correct: Optional[bool] = None
+    name: Optional[str] = None
     ctxs: List[CtxExample] = field(default_factory=list)
 
     @classmethod
@@ -51,6 +55,22 @@ class CtxsRelevance:
             for idx in idxs:
                 mapping[idx] = label
         return mapping
+    
+    @classmethod
+    def from_mapping(cls, mapping_data: Dict[str, str]) -> "CtxsRelevance":
+        pos, neg, irr = [], [], []
+        
+        # JSON에서 키가 문자열로 들어올 수 있으므로 int 변환 처리
+        for idx_str, label in mapping_data.items():
+            idx = int(idx_str) 
+            if label == "positive":
+                pos.append(idx)
+            elif label == "negative":
+                neg.append(idx)
+            elif label == "irrelevant":
+                irr.append(idx)
+        
+        return cls(positive=pos, negative=neg, irrelevant=irr)
 
 
 @dataclass
@@ -63,7 +83,12 @@ class RelevanceQAExample(QAExample):
         raw_ctxs = data.pop("ctxs", [])
         ctxs_obj = [CtxExample(**ctx) for ctx in raw_ctxs]
         raw_relevance = data.pop("ctx_relevance", {})
-        relevance_obj = CtxsRelevance(**raw_relevance)
+
+        if "positive" in raw_relevance or "negative" in raw_relevance:
+            relevance_obj = CtxsRelevance(**raw_relevance)
+        else:
+            mapping_data = raw_relevance.get("mapping", raw_relevance)
+            relevance_obj = CtxsRelevance.from_mapping(mapping_data)
         return cls(ctxs=ctxs_obj, ctx_relevance=relevance_obj, **data)
 
     @classmethod
@@ -79,6 +104,25 @@ class InferenceResult:
     pred_answer: str
     answers: List[str]
     metrics: MetricResult
+
+
+class BoostedProbResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    top_k: int
+    top_p: float
+    accum_prob: torch.Tensor    # (seq_len,)
+    diff_probs: torch.Tensor    # (seq_len, top-k)
+
+    @field_serializer("accum_prob")
+    def serialize_accum(self, v: torch.Tensor):
+        data = v.cpu().tolist()
+        return [round(x, 6) for x in data]
+
+    @field_serializer('diff_probs')
+    def serialize_diff(self, v: torch.Tensor):
+        list_data = v.cpu().tolist()
+        return [[round(x, 6) for x in row] for row in list_data]
 
 
 
@@ -120,16 +164,3 @@ def load_relevance_dataset(data_path: str) -> List[RelevanceQAExample]:
     
     print(f"Successfully loaded {len(relevance_examples)} Relevance QA examples.")
     return relevance_examples
-
-
-if __name__ == "__main__":
-    # Example usage
-    NQ_DIR = "../../data/nq/retrieved"
-    train_path = os.path.join(NQ_DIR, "train.jsonl")
-    validation_path = os.path.join(NQ_DIR, "validation.jsonl")
-    dataset = load_dataset("json", data_files={"train": train_path, "validation": validation_path})
-    train = dataset["train"]
-
-    for item in train:
-        import pdb; pdb.set_trace()
-        qa_example = QAExample.from_dict(item)

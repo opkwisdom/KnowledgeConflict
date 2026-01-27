@@ -10,11 +10,12 @@ import json
 
 from KVzip.model import ModelKVzip
 from KVzip.attention import RetainCache, EvictCache
-from utils import CtxExample, CtxsRelevance, template
+from src.utils import CtxExample, CtxsRelevance, BoostedProbResult, template, compute_metrics
 
 from .conflict_resources import *
 from .conflict_handler import ConflictConfigHandler
 from .lexical_cue import LexicalCueEmbedder
+from .uncertainty_estimator import UncertaintyEstimator
 
 class KnowledgeFusionCore:
     def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
@@ -28,6 +29,7 @@ class KnowledgeFusionCore:
         # Another core components
         self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config)
         # self.lex_cue_embedder = LexicalCueEmbedder(config.model.lexical_cue, self.conflict_handler)
+        # self.uncertainty_estimator = UncertaintyEstimator(config.uncertainty_estimator)
         self.__post_init__()
     
     def set_base_chat_template(self, task: str = "qa"):
@@ -109,7 +111,8 @@ class KnowledgeFusionCore:
         a_ids: torch.Tensor,
         relevance_map: CtxsRelevance,
         prune_ratio: float,
-    ) -> List[EvictCache]:
+        return_idx: bool = False,
+    ) -> Union[List[EvictCache], List[Tuple[int, EvictCache]]]:
         evicted_kvs = []
 
         for ctx_idx, ctx_ex in enumerate(contexts):
@@ -138,7 +141,7 @@ class KnowledgeFusionCore:
                     prune_type=relevance
                 )
                 # evicted_kvs.append((relevance, kv))
-                evicted_kvs.append(kv)
+                evicted_kvs.append((ctx_idx, kv) if return_idx else kv)
         
         return evicted_kvs
     
@@ -150,7 +153,7 @@ class KnowledgeFusionCore:
         relevance: CtxsRelevance,
         internal_answer: str,
         use_single_context: bool = True,
-    ) -> Tuple[str, str, List[EvictCache]]:
+    ) -> Tuple[str, str]:
         # input query & internal answer
         q_ids = self._kvzip.encode(query) if isinstance(query, str) else query
         a_ids = self._kvzip.encode(internal_answer) if isinstance(internal_answer, str) else internal_answer
@@ -204,7 +207,7 @@ class KnowledgeFusionCore:
         gen_ids = output[:, len(input_ids[0]):-1]  # parse response
         generated_text = self._kvzip.decode(gen_ids)
         
-        return generated_text, final_rel_type, all_kv
+        return generated_text, final_rel_type
     
     def filter_irrelevant_contexts(
         self,
@@ -242,15 +245,81 @@ class KnowledgeFusionCore:
     def generate_internal_answer(
         self,
         query: Union[str, torch.Tensor],
-    ) -> str:
+        output_attentions: bool = False,
+    ) -> Union[str, Tuple[str, float], Tuple[str, BoostedProbResult]]:
         # Construct input_ids with prompt template
         input_text = self.base_prompt.format(question=query)
         input_ids = self._kvzip.apply_template(input_text)
         input_ids = torch.cat([self.sys_prompt_ids, input_ids], dim=1)
         input_ids = input_ids.to(self.device)
 
-        output = self.model.generate(input_ids, **self._kvzip.gen_kwargs)
-        gen_ids = output[:, len(input_ids[0]):-1]
+        # BoostedProb or not
+        gen_config = self._kvzip.gen_kwargs.copy()
+        if output_attentions:
+            gen_config.update({
+                "output_attentions": True,
+                "return_dict_in_generate": True,
+            })
+        output = self.model.generate(input_ids, **gen_config)
+
+        # Quality estimation
+        if not isinstance(output, str):
+            sequences = output.sequences
+            import pdb; pdb.set_trace()
+            # boosted_prob_result = self.uncertainty_estimator.calibrate_inspect(output.scores)\
+            #     if inspect_mode else self.uncertainty_estimator.calibrate(output.scores)
+        else:
+            sequences = output
+
+        gen_ids = sequences[:, len(input_ids[0]):-1]
         generated_text = self._kvzip.decode(gen_ids)
 
+        if output_attentions:
+            return generated_text, None
+
         return generated_text
+    
+    @torch.inference_mode()
+    def extract_features(
+        self,
+        query: Union[str, torch.Tensor],
+        contexts: List[CtxExample],
+        relevance: CtxsRelevance,
+        internal_answer: str,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Extract features from evicted KV caches to train conflict detector.
+        """
+        # input query & internal answer
+        q_ids = self._kvzip.encode(query) if isinstance(query, str) else query
+        a_ids = self._kvzip.encode(internal_answer) if isinstance(internal_answer, str) else internal_answer
+        
+        relevance_map = relevance.mapping
+        tagged_all_kv = self.get_evicted_kvs(
+            contexts,
+            q_ids=q_ids,
+            a_ids=a_ids,
+            relevance_map=relevance_map,
+            prune_ratio=self.config.model.prune.ratio,
+            return_idx=True,
+        )
+
+        features = {}
+        for idx, kv in tagged_all_kv:
+            cross_attention_scores = torch.cat(kv.score, dim=0)
+            max_features = torch.amax(cross_attention_scores, dim=-1)
+            entropy_features = -torch.sum(
+                cross_attention_scores * torch.log(cross_attention_scores + 1e-10),
+                dim=-1
+            )
+            sum_features = torch.sum(cross_attention_scores, dim=-1)
+
+            relevance_type = relevance_map[idx]
+            features[relevance_type] = torch.stack([
+                max_features,
+                entropy_features,
+                sum_features,
+            ], dim=-1).cpu()  # (layer, head, 3)
+
+        return features
+    # Max, Entropy, Sum features, Delta features

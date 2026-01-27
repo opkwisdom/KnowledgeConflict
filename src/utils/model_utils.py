@@ -1,6 +1,8 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from typing import Mapping
+import random
+import numpy as np
 
 def get_model_name(name: str):
     """ We support abbreviated model names such as:
@@ -49,3 +51,10 @@ def move_to_cuda(sample):
             return maybe_tensor
 
     return _move_to_cuda(sample)
+
+
+def setup_seed(seed: int = 42) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)

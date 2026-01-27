@@ -1,0 +1,20 @@
+data:
+  filepath: /workspaces/kvzip_nlplab/KFC/data/combined_train_data/train_features.pt
+  batch_size: 128
+  num_workers: 4
+
+train:
+  learning_rate: 1e-4
+  warmup_ratio: 0.1
+  max_epochs: 100
+
+model:
+  n_heads: 8
+  n_features: 3
+  inter_channels: 128
+  out_channels: 32
+  n_layer: 32
+  kernel_size: 5
+
+project_name: conflict_detector
+output_dir: /workspaces/kvzip_nlplab/KFC-dev/src/trained_model

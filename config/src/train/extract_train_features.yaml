@@ -1,0 +1,35 @@
+data:
+  name: raw
+  data_path: /workspaces/kvzip_nlplab/KFC/data/combined_train_data/raw_pj.jsonl
+  max_seq_length: 1024
+
+judger:
+  llm_model_name: gpt-4o-mini
+  prompt_name: judge_only_contexts
+  cache_dir: src/cache_dir
+  use_cache: True # True
+  use_openai: True
+
+model:
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+  ### Pruning options
+  prune:
+    ratio: 0.3
+  ### Filter irrelevant contexts
+  conflict_topk: 100
+  control_metadata:
+    stats_path: experiments/cache_stats/kv_cache_control_stats.json
+    layer_info_path: experiments/cache_stats/conflict_layer_info.json
+
+
+self_task_prompt_name: base
+generate_prompt_name: base
+output_dir: src/results/train/extract_train_features
+task: base
+experiment_name:

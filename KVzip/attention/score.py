@@ -141,7 +141,7 @@ class KVScore():
                 # valids[:, target_heads] = target_valids
 
                 pruned_score.append(valids)
-                thres_list.append(thres)
+                thres_list.append(-1.)
         
         pruned_kv = torch.stack(pruned_score, dim=0)    # (L, 1, H, N)
         # if ratio < 1:

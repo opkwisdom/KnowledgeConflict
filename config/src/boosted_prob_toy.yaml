@@ -12,7 +12,6 @@ model:
     top_p: 1
     top_k: null
     max_new_tokens: 32
-  return_probs: False  # Uncentainty
   ### Pruning options
   prune:
     ratio: 0.3
@@ -36,11 +35,10 @@ uncertainty_estimator:
   # Calibration hyperparameters
   x: 0.5
   eps: 0.01
-  # Threshold
-  thres: 0.95
+
 
 self_task_prompt_name: base
 generate_prompt_name: base
-output_dir: src/results/main/no_judge
+output_dir: src/results/main/boosted_prob_toy
 task: base
 experiment_name:
