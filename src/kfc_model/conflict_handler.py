@@ -51,6 +51,10 @@ class ConflictConfigHandler:
         if isinstance(self.model_config, LlamaConfig):
             critical_indices = LLAMA_CRITICAL_INDICES
             self.selected_layers = LLAMA_CRITICAL_INDICES
+            # critical_indices = TEMP_INDICES
+            # self.selected_layers = TEMP_INDICES
+            # critical_indices = NONE_INDICES
+            # self.selected_layers = NONE_INDICES
 
         if critical_indices:
             critical_map, normal_map = self._parse_critical_indices(critical_indices)

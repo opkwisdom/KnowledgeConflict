@@ -173,6 +173,15 @@ class KVScore():
         valids = torch.stack(valids)
         return valids, 0
     
+    def _identity(self, score: Union[torch.Tensor, List[torch.Tensor]]):
+        """ No pruning
+        """
+        valids = []
+        for layer_score in score:
+            valids.append(torch.ones_like(layer_score, dtype=bool))
+        valids = torch.stack(valids)
+        return valids, 0
+    
     def validate_relevance(
         self,
         topk: int = 100,

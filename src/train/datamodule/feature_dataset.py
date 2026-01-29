@@ -16,7 +16,7 @@ class FeatureExample:
 
 logger = logging.getLogger(__name__)
 
-class ConflictDataset(Dataset):
+class FeatureDataset(Dataset):
     def __init__(self, data: List[FeatureExample]):
         self.data = data
     
@@ -31,23 +31,23 @@ class ConflictDataset(Dataset):
         }
     
 
-class ConflictDataModule(LightningDataModule):
+class FeatureDataModule(LightningDataModule):
     def __init__(self, cfg: DictConfig):
         super().__init__()
         self.cfg = cfg
         self.batch_size = cfg.batch_size
         self.num_workers = cfg.num_workers
-        self.train_dataset: Optional[ConflictDataset] = None
-        self.val_dataset: Optional[ConflictDataset] = None
+        self.train_dataset: Optional[FeatureDataset] = None
+        self.val_dataset: Optional[FeatureDataset] = None
 
     def setup(self, stage: Optional[str] = None):
         dataset = torch.load(self.cfg.filepath, map_location="cpu", weights_only=False)
         train_dataset, valid_dataset = train_test_split(dataset, test_size=0.2, random_state=42)
         if stage == 'fit' or stage is None:
-            self.train_dataset = ConflictDataset(train_dataset)
-            self.val_dataset = ConflictDataset(valid_dataset)
+            self.train_dataset = FeatureDataset(train_dataset)
+            self.val_dataset = FeatureDataset(valid_dataset)
         elif stage == 'validate':
-            self.val_dataset = ConflictDataset(valid_dataset)
+            self.val_dataset = FeatureDataset(valid_dataset)
         else:
             raise ValueError(f"Unknown stage: {stage}")
     

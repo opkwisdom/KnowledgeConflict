@@ -112,6 +112,7 @@ class KnowledgeFusionCore:
         relevance_map: CtxsRelevance,
         prune_ratio: float,
         return_idx: bool = False,
+        return_irr: bool = False,
     ) -> Union[List[EvictCache], List[Tuple[int, EvictCache]]]:
         evicted_kvs = []
 
@@ -125,6 +126,13 @@ class KnowledgeFusionCore:
 
             # Case 1 - Irrelevant context
             if relevance == "irrelevant":
+                if return_irr:
+                    kv = self.prefill(
+                        ctx_ids=context,
+                        q_ids=q_ids,
+                        a_ids=a_ids,
+                    )
+                    evicted_kvs.append((ctx_idx, kv) if return_idx else kv)
                 continue
             # Case 2 - Conflict context
             else:
@@ -263,7 +271,7 @@ class KnowledgeFusionCore:
         output = self.model.generate(input_ids, **gen_config)
 
         # Quality estimation
-        if not isinstance(output, str):
+        if output_attentions:
             sequences = output.sequences
             import pdb; pdb.set_trace()
             # boosted_prob_result = self.uncertainty_estimator.calibrate_inspect(output.scores)\
@@ -286,7 +294,7 @@ class KnowledgeFusionCore:
         contexts: List[CtxExample],
         relevance: CtxsRelevance,
         internal_answer: str,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
         """
         Extract features from evicted KV caches to train conflict detector.
         """
@@ -302,9 +310,11 @@ class KnowledgeFusionCore:
             relevance_map=relevance_map,
             prune_ratio=self.config.model.prune.ratio,
             return_idx=True,
+            return_irr=True,
         )
 
-        features = {}
+        features_dict = {}
+        # Max, Entropy, Sum features, Hidden states, Logit diff
         for idx, kv in tagged_all_kv:
             cross_attention_scores = torch.cat(kv.score, dim=0)
             max_features = torch.amax(cross_attention_scores, dim=-1)
@@ -313,13 +323,31 @@ class KnowledgeFusionCore:
                 dim=-1
             )
             sum_features = torch.sum(cross_attention_scores, dim=-1)
+            
+            # extract conflict hidden and vocab logits
+            input_text = self.generate_prompt.format(question=query)
+            input_ids = self._kvzip.apply_template(input_text)
+            input_ids = input_ids.to(self.device)
+            # if you use forward method, do not concat prefill_ids again
+            outputs = self.model(input_ids, past_key_values=kv, output_hidden_states=True)
 
-            relevance_type = relevance_map[idx]
-            features[relevance_type] = torch.stack([
-                max_features,
-                entropy_features,
-                sum_features,
-            ], dim=-1).cpu()  # (layer, head, 3)
+            mid_layer = self.model.config.num_hidden_layers // 2
+            h_mid = outputs.hidden_states[mid_layer][:, -1, :]
+            h_last = outputs.hidden_states[-1][:, -1, :]
 
-        return features
-    # Max, Entropy, Sum features, Delta features
+            logits_last = self.model.lm_head(h_last)
+            logits_mid = self.model.lm_head(h_mid)
+            logit_diff = logits_last - logits_mid
+
+            # Pack features
+            relevance_type = relevance_map.get(idx, "irrelevant")
+            features = torch.stack([max_features, entropy_features, sum_features,], dim=-1).cpu()   # (layer, head, 3)
+
+            features_dict[relevance_type] = {
+                "features": features,
+                "h_mid": h_mid.squeeze().cpu(),
+                "h_last": h_last.squeeze().cpu(),
+                "logit_diff": logit_diff.squeeze().cpu(),
+            }
+
+        return features_dict

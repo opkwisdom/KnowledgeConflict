@@ -12,3 +12,6 @@ index/
 **/*.html
 **/.env
 **/wandb
+
+**/*.ckpt
+**/*.pt

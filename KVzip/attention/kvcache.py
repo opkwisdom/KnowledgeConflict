@@ -130,12 +130,14 @@ class EvictCache(DynamicCache, KVScore):
     def prune(self, ratio: float, level="pair", prune_kwargs: Optional[Dict[int, List[int]]] = None, prune_type: str = "positive"):
         """ Prune the KV cache 
         """
-        if "uniform" in level:
+        # No pruning
+        if ratio == 0.0:
+            self.valid, thres = self._identity(self.score)
+        elif "uniform" in level:
             self.valid, thres = self._threshold_uniform(self.score, ratio)
         else:
             self.valid, thres = self._threshold(self.score, ratio, prune_kwargs, prune_type)
         assert self.valid.size(-1) == self.ctx_len
-
         rmv = (self.valid == False).float()  # evicted KV pairs
         r_ = 1 - rmv.mean().item()  # real compression ratio
         self.prepare_init()

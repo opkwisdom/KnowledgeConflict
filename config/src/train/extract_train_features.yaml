@@ -20,7 +20,7 @@ model:
     max_new_tokens: 32
   ### Pruning options
   prune:
-    ratio: 0.3
+    ratio: 0.0
   ### Filter irrelevant contexts
   conflict_topk: 100
   control_metadata:

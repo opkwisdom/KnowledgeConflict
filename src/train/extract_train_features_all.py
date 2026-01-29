@@ -42,7 +42,8 @@ def _determine_label(is_correct: bool, context_type: str) -> int:
     # label 1 - Negative conflict
     # label 2 - Irrelevant noise
     # label 3 - Positive conflict
-    # label 4 - Failure
+    # label 4 - Weakly supported
+    # label 5 - Failure
     if is_correct:
         if context_type == "positive":
             return 0
@@ -53,8 +54,10 @@ def _determine_label(is_correct: bool, context_type: str) -> int:
     else:
         if context_type == "positive":
             return 3
-        else:
+        elif context_type == "negative":
             return 4
+        else:
+            return 5
 
 
 def judge_data(
@@ -122,28 +125,8 @@ def extract_features(
                 label=label
             )
             feature_list.append(feature_example)
-    sorted_counts = [label_counts[i] for i in range(5)]
+    sorted_counts = [label_counts[i] for i in range(6)]
     return feature_list, sorted_counts
-
-def judge_and_save(
-    config: DictConfig,
-    llm_judger: OpenAIJudger,
-    data: List[QAExample],
-    is_correct_filter: bool = True,
-    logger = None
-) -> None:
-    judged_data = judge_data(config, llm_judger, data, is_correct_filter=is_correct_filter)
-    file_name = "judged_data_temp_pos_2.json" if is_correct_filter else "judged_data_temp_neg_2.json"
-    temp_save_path = os.path.join(
-        os.path.dirname(config.data.data_path),
-        file_name
-    )
-    with open(temp_save_path, 'w') as f:
-        for item in judged_data:
-            json_line = json.dumps(asdict(item), ensure_ascii=False)
-            f.write(json_line + "\n")
-    if logger:
-        logger.info(f"Saved {len(judged_data)} judged data to {temp_save_path}")
 
 
 def load_temp_judged_data(
@@ -195,11 +178,11 @@ def main():
 
     features, label_counts = extract_features(judged_data, kfc)
     logger.info(f"Extracted {len(features)} feature examples.")
-    for i in range(5):
+    for i in range(6):
         logger.info(f"Label {i} - {label_counts[i]}")
     feature_save_path = os.path.join(
         os.path.dirname(config.data.data_path),
-        "train_features_enhanced.pt"
+        "train_features_enhanced_all.pt"
     )
     torch.save(features, feature_save_path)
 
