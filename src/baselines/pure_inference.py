@@ -87,6 +87,58 @@ def run_inference(
         results[f"param_{rel_type}"].append(sample_result)
     return results
 
+def run_verify_inference(
+    config: DictConfig,
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    data: List[RelevanceQAExample],
+    logger,
+) -> Dict[str, List[InferenceResult]]:
+    logger.info("Starting Pure Inference (for Analysis)...")
+    inference_cases = ["param_RAG", "param_Ignore", "param_Weak", "param_Failure"]
+    results = {infer_case: [] for infer_case in inference_cases}
+    generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
+
+    for idx, item in tqdm(enumerate(data), desc="Running Pure Inference", total=len(data)):
+        relevance_map = item.ctx_relevance.mapping
+
+        _, rel_type = construct_context(item.ctxs, relevance_map, config.data.use_single_context)
+        query_text = generate_prompt.format(question=item.question)
+        input_text = apply_template(query_text, None, config.model.model_name)
+
+        input_ids = tokenizer.encode(input_text, return_tensors='pt').to(model.device)
+        attention_mask = torch.ones_like(input_ids).to(model.device)
+        outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
+
+        # Decode generated answer
+        gen_ids = outputs[:, input_ids.shape[1]:-1]
+        pred_answer = tokenizer.decode(gen_ids[0])
+
+        metrics = compute_metrics(pred_answer, item.answers)
+        
+        # Construct result
+        sample_result = InferenceResult(
+            id=idx,
+            question=item.question,
+            pred_answer=pred_answer,
+            answers=item.answers,
+            metrics=metrics,
+        )
+
+        # Case 1 - RAG (positive psg)
+        if 0 in item.ctx_relevance.positive:
+            results["param_RAG"].append(sample_result)
+        # Case 2 - Ignore (known / negative psg, irrelevant psg)
+        elif item.is_correct and (0 in item.ctx_relevance.negative or 0 in item.ctx_relevance.irrelevant):
+            results["param_Ignore"].append(sample_result)
+        # Case 3 - Weak (incorrect answer with positive psg)
+        elif not item.is_correct and (0 in item.ctx_relevance.negative):
+            results["param_Weak"].append(sample_result)
+        # Case 4 - Failure
+        else:
+            results["param_Failure"].append(sample_result)
+    return results
+
 def run_baseline_inference(
     config: DictConfig,
     model: AutoModelForCausalLM,
@@ -156,6 +208,16 @@ def validate_and_save_results(
             "f1": round(f1, 4),
         }
     
+    def pydantic_encoder(obj):
+        # Pydantic V2 (model_dump 사용)
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+        # Pydantic V1 (dict 사용)
+        if hasattr(obj, "dict"):
+            return obj.dict()
+        # 그 외 처리 불가 객체는 에러 발생
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+    
     with open(summary_path, 'w') as f:
         json.dump(summary, f, ensure_ascii=False, indent=4)
     logger.info(f"Saved inference summary to {summary_path}")
@@ -163,7 +225,7 @@ def validate_and_save_results(
         json_results = {
             k: [asdict(res) for res in v] for k, v in results.items()
         }
-        json.dump(json_results, f, ensure_ascii=False, indent=4)
+        json.dump(json_results, f, ensure_ascii=False, indent=4, default=pydantic_encoder)
 
 
 def main():
@@ -179,7 +241,7 @@ def main():
     logger.info(OmegaConf.to_yaml(config))
 
     # Load data
-    if "nq" in config.data.data_path:
+    if "nq" == config.data.name:
         data = load_relevance_dataset(config.data.data_path)
     else:
         data = load_qa_dataset(config.data.data_path)
@@ -188,15 +250,17 @@ def main():
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model
-    model = AutoModelForCausalLM.from_pretrained(config.model.model_name)
+    model = AutoModelForCausalLM.from_pretrained(config.model.model_name, torch_dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(config.model.model_name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
     model.to('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Model {config.model.model_name} initialized.")
 
     # Inference
-    if config.run_baseline:
+    if config.mode == "baseline":
         inference_results = run_baseline_inference(config, model, tokenizer, data, logger)
+    elif config.mode == "verify":
+        inference_results = run_verify_inference(config, model, tokenizer, data, logger)
     else:
         inference_results = run_inference(config, model, tokenizer, data, logger)
     validate_and_save_results(inference_results, config.output_dir, logger)

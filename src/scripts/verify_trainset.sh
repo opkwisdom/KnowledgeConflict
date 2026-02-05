@@ -1,0 +1,15 @@
+#!/bin/bash
+
+export CUDA_VISIBLE_DEVICES=2
+export PYTHONPATH=$PWD:$PYTHONPATH
+
+CONFIG_PATH=$1
+
+ratios=(0.3)
+
+for ratio in "${ratios[@]}"
+do
+    python3 src/verify_trainset.py \
+        --config $CONFIG_PATH \
+        model.prune.ratio=$ratio
+done

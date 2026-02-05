@@ -43,6 +43,7 @@ class ConflictConfigHandler:
             normal_heads = all_heads_in_layer - set(critical_heads)
             if normal_heads:
                 normal_map[layer_idx] = list(normal_heads)
+        normal_map = {}     # Disable normal map for now
         
         return critical_map, normal_map
     

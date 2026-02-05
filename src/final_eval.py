@@ -1,6 +1,6 @@
 import json
 
-SUMMARY_PATH = "results/main/no_judge/ratio=0.3_prompt=base/20260126_020658/inference_summary.txt"
+SUMMARY_PATH = "src/results/verify_rag/nq/prompt=base/20260205_083339/inference_summary.txt"
 with open(SUMMARY_PATH, 'r') as f:
     data = json.load(f)
 

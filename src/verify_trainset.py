@@ -1,13 +1,12 @@
-from typing import Any, Dict, List, Tuple, Union, Optional
-import torch
+from typing import Any, Dict, List
 from omegaconf import OmegaConf, DictConfig
 from datetime import datetime
 from dataclasses import dataclass, asdict
+from pydantic import BaseModel
 from tqdm import tqdm
 import logging
 import json
 import os
-from pydantic import BaseModel
 
 from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
@@ -32,13 +31,11 @@ class InferenceResult(BaseModel):
 def run_inference(
     config: DictConfig,
     kfc: KnowledgeFusionCore,
-    llm_judger: LLMJudger,
     data: List[RelevanceQAExample],
     logger,
 ) -> Dict[str, List[InferenceResult]]:
-    inference_cases = ["param_true", "param_positive", "param_negative", "param_irrelevant", "param_multiple"]
+    inference_cases = ["param_RAG", "param_Ignore", "param_Weak", "param_Failure"]
     results = {infer_case: [] for infer_case in inference_cases}
-
     for idx, item in tqdm(enumerate(data), desc="Running KFC Inference", total=len(data)):
         question = item.question
         a_internal = kfc.generate_internal_answer(question)
@@ -46,37 +43,20 @@ def run_inference(
         if idx == 0:
             logger.info(f"Sample Internal Answer: {a_internal}")
         
-        judge_output: JudgeOutput = llm_judger.judge(
-            query=item.question,
-            answer=a_internal,
-            contexts=item.ctxs #single
-        )
-        item.ctx_relevance = judge_output.ctx_relevance     # Real-time LLM judged relevance
-        
-        is_correct = judge_output.is_correct
-        # Case 1 - Internal answer is correct
-        if is_correct:
-            sample_result = InferenceResult(
-                id=idx,
-                question=item.question,
-                pred_answer=a_internal,
-                answers=item.answers,
-                metrics=compute_metrics(a_internal, item.answers),
-                has_answer=item.ctxs[0].hasanswer,
-                ctx_class=judge_output.ctx_relevance
-            )
-            results["param_true"].append(sample_result)
-        # Case 3 - Internal answer is incorrect
-        else:
-            # Facade pattern
-            pred_answer, rel_type = kfc.resolve_and_generate(
-                query=item.question,
-                contexts=item.ctxs,
-                relevance=item.ctx_relevance,
-                internal_answer=a_internal,
-                use_single_context=True,    # Temporary
-            )
+        # Irrelevant filtering
+        if config.data.use_single_context:
+            item.ctxs = [item.ctxs[0]]
 
+        pred_answer, rel_type = kfc.resolve_and_generate(
+            query=item.question,
+            contexts=item.ctxs,
+            relevance=item.ctx_relevance,
+            internal_answer=a_internal,
+            use_single_context=True,    # Temporary
+        )
+
+        # Case 1 - RAG (positive psg)
+        if 0 in item.ctx_relevance.positive:
             sample_result = InferenceResult(
                 id=idx,
                 question=item.question,
@@ -84,11 +64,46 @@ def run_inference(
                 answers=item.answers,
                 metrics=compute_metrics(pred_answer, item.answers),
                 has_answer=item.ctxs[0].hasanswer,
-                ctx_class=judge_output.ctx_relevance
+                ctx_class=asdict(item.ctx_relevance)
             )
-            results[f"param_{rel_type}"].append(sample_result)
+            results["param_RAG"].append(sample_result)
+        # Case 2 - Ignore (known / negative psg, irrelevant psg)
+        elif item.is_correct and (0 in item.ctx_relevance.negative or 0 in item.ctx_relevance.irrelevant):
+            sample_result = InferenceResult(
+                id=idx,
+                question=item.question,
+                pred_answer=a_internal,
+                answers=item.answers,
+                metrics=compute_metrics(a_internal, item.answers),
+                has_answer=item.ctxs[0].hasanswer,
+                ctx_class=asdict(item.ctx_relevance)
+            )
+            results["param_Ignore"].append(sample_result)
+        # Case 3 - Weakly supported (unknown / negative psg)
+        elif not item.is_correct and (0 in item.ctx_relevance.negative):
+            sample_result = InferenceResult(
+                id=idx,
+                question=item.question,
+                pred_answer=pred_answer,
+                answers=item.answers,
+                metrics=compute_metrics(pred_answer, item.answers),
+                has_answer=item.ctxs[0].hasanswer,
+                ctx_class=asdict(item.ctx_relevance)
+            )
+            results["param_Weak"].append(sample_result)
+        # Case 4 - Failure (unknown / irrelevant psg)
+        else:
+            sample_result = InferenceResult(
+                id=idx,
+                question=item.question,
+                pred_answer=a_internal,
+                answers=item.answers,
+                metrics=compute_metrics(a_internal, item.answers),
+                has_answer=item.ctxs[0].hasanswer,
+                ctx_class=asdict(item.ctx_relevance)
+            )
+            results["param_Failure"].append(sample_result)
     logger.info("Inference completed.")
-    # logger.info(f"Total cost: {llm_judger.get_total_cost():.6f} USD")
 
     return results
 
@@ -160,6 +175,7 @@ def main():
 
     # Load data
     data = load_relevance_dataset(config.data.data_path)
+    # data = data[:100]
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model
@@ -168,12 +184,7 @@ def main():
     kfc = KnowledgeFusionCore(config, kvzip, generate_prompt, base_prompt, logger)
     logger.info("Knowledge Fusion Core initialized.")
 
-    if config.judger.use_openai:
-        judger: LLMJudger = OpenAIJudger(config.judger)
-    else:
-        judger: LLMJudger = HfLLMJudger(config.judger)
-
-    inference_result = run_inference(config, kfc, judger, data, logger)
+    inference_result = run_inference(config, kfc, data, logger)
     validate_and_save_results(inference_result, config.output_dir, logger)
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ class ConflictFeatureDetector(nn.Module):
 
         self.input_dim = cfg.n_heads * cfg.n_features
         self.input_norm = nn.LayerNorm(self.input_dim)
+        self.dropout = nn.Dropout(p=cfg.dropout)
         # Projection layer
         self.proj = nn.Linear(self.input_dim, cfg.inter_channels)
         self.relu = nn.ReLU()
@@ -72,6 +73,7 @@ class ConflictFeatureDetector(nn.Module):
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.relu(self.bn2(self.conv2(x)))
         x = self.flatten(x)
+        x = self.dropout(x)
         return self.fc(x)
     
 
@@ -125,9 +127,15 @@ class ConflictFeatureDetectorModule(LightningModule):
         f1_scores = self.f1(all_preds.to(self.device), all_targets.to(self.device))
         acc_scores = self.acc(all_preds.to(self.device), all_targets.to(self.device))
         # self.log("val_f1_non_conflict", f1_scores[0], prog_bar=True)
-        self.log("val_f1_positive", f1_scores[0], prog_bar=True)
-        self.log("val_f1_negative", f1_scores[1], prog_bar=True)
-        # self.log("val_f1_positive", f1_scores[2], prog_bar=True)
+        # self.log("val_f1_k_pos", f1_scores[0], prog_bar=True)
+        # self.log("val_f1_k_neg", f1_scores[1], prog_bar=True)
+        # self.log("val_f1_k_irr", f1_scores[2], prog_bar=True)
+        # self.log("val_f1_uk_pos", f1_scores[3], prog_bar=True)
+        # self.log("val_f1_uk_neg", f1_scores[4], prog_bar=True)
+        # self.log("val_f1_uk_irr", f1_scores[5], prog_bar=True)
+        self.log("val_f1_pos", f1_scores[0], prog_bar=True)
+        self.log("val_f1_neg", f1_scores[1], prog_bar=True)
+        self.log("val_f1_irr", f1_scores[2], prog_bar=True)
         self.log("val_acc", acc_scores, prog_bar=True)
 
         preds_np = all_preds.numpy()
@@ -146,8 +154,8 @@ class ConflictFeatureDetectorModule(LightningModule):
             probs=None,
             y_true=targets_np,
             preds=preds_np,
-            # class_names=["Non", "Neg", "Pos"],
-            class_names=["Pos", "Neg"],
+            # class_names=["K_Pos", "K_Neg", "K_Irr", "UK_Pos", "UK_Neg", "UK_Irr"],
+            class_names=["Pos", "Neg", "Irr"],
             title=f"Confusion Matrix (Epoch {self.current_epoch})"
         )
         wandb_logger.experiment.log({"val_cm": conf_mat_plot, "epoch": self.current_epoch})

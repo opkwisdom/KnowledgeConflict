@@ -144,11 +144,10 @@ class KnowledgeFusionCore:
                     a_ids=a_ids,
                 )
                 kv.prune(
-                    ratio=prune_ratio,
+                    ratio=prune_ratio if relevance != "positive" else 0.0,
                     prune_kwargs=prune_map,
                     prune_type=relevance
                 )
-                # evicted_kvs.append((relevance, kv))
                 evicted_kvs.append((ctx_idx, kv) if return_idx else kv)
         
         return evicted_kvs

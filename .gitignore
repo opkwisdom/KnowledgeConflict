@@ -8,10 +8,13 @@ index/
 **/*.json
 **/*.jsonl
 **/*.db
+
+# Experiment results
 **/src/results
 **/*.html
 **/.env
 **/wandb
 
+# Checkpoints
 **/*.ckpt
 **/*.pt

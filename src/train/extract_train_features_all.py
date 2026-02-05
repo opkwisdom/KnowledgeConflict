@@ -37,27 +37,38 @@ class FeatureExample:
     logit_diff: torch.Tensor
     label: int
 
-def _determine_label(is_correct: bool, context_type: str) -> int:
-    # label 0 - Non-conflict
-    # label 1 - Negative conflict
-    # label 2 - Irrelevant noise
-    # label 3 - Positive conflict
-    # label 4 - Weakly supported
-    # label 5 - Failure
-    if is_correct:
-        if context_type == "positive":
-            return 0
-        elif context_type == "negative":
-            return 1
-        else:
-            return 2
+# def _determine_label(is_correct: bool, context_type: str) -> int:
+#     # label 0 - Non-conflict
+#     # label 1 - Negative conflict
+#     # label 2 - Irrelevant noise
+#     # label 3 - Positive conflict
+#     # label 4 - Weakly supported
+#     # label 5 - Failure
+#     if is_correct:
+#         if context_type == "positive":
+#             return 0
+#         elif context_type == "negative":
+#             return 1
+#         else:
+#             return 2
+#     else:
+#         if context_type == "positive":
+#             return 3
+#         elif context_type == "negative":
+#             return 4
+#         else:
+#             return 5
+
+def _determine_label(context_type: str) -> int:
+    # label 0 - Positive
+    # label 1 - Negative
+    # label 2 - Irrelevant
+    if context_type == "positive":
+        return 0
+    elif context_type == "negative":
+        return 1
     else:
-        if context_type == "positive":
-            return 3
-        elif context_type == "negative":
-            return 4
-        else:
-            return 5
+        return 2
 
 
 def judge_data(
@@ -114,7 +125,8 @@ def extract_features(
             a_internal,
         )
         for k, v in features.items():
-            label = _determine_label(item.is_correct, k)
+            # label = _determine_label(item.is_correct, k)
+            label = _determine_label(k)
             label_counts[label] += 1
 
             feature_example = FeatureExample(

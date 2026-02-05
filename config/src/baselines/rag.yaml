@@ -1,8 +1,9 @@
 data:
-  name: triviaqa
-  data_path: data/triviaqa/retrieved/test.jsonl
+  name: nq
+  data_path: data/combined_train_data/sampled_train_data.jsonl
   max_seq_length: 1024
-  use_single_context: True
+  use_single_context: False
+  topk: 5
 
 model:
   model_name: meta-llama/Llama-3.1-8B-Instruct
@@ -14,7 +15,7 @@ model:
     max_new_tokens: 32
 
 generate_prompt_name: base
-output_dir: src/results/rag
+output_dir: src/results/verify_rag
 task: base
-run_baseline: True
+mode: verify
 experiment_name:

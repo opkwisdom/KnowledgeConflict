@@ -1,6 +1,6 @@
 data:
-  name: triviaqa
-  data_path: data/triviaqa/retrieved/test.jsonl
+  name: nq
+  data_path: data/combined_train_data/sampled_train_data.jsonl
   max_seq_length: 1024
   use_single_context: True
 
@@ -14,7 +14,7 @@ model:
     max_new_tokens: 32
 
 generate_prompt_name: pure-llm-brief-2
-output_dir: src/results/pure
+output_dir: src/results/verify_pure
 task: base
-run_baseline: True
+mode: verify
 experiment_name:
