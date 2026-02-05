@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Union
 import json
 import os
 import torch
-from pydantic import BaseModel, ConfigDict, field_serializer
+from pydantic import BaseModel, ConfigDict, field_serializer, Field
 from tqdm import tqdm
 from datasets import load_dataset, DatasetDict
 
@@ -38,11 +38,10 @@ class QAExample:
 
 
 ### Append ctx relevance information to QAExample
-@dataclass
-class CtxsRelevance:
-    positive: List[int] = field(default_factory=list)
-    negative: List[int] = field(default_factory=list)
-    irrelevant: List[int] = field(default_factory=list)
+class CtxsRelevance(BaseModel):
+    positive: List[int] = Field(..., description="List of 0-based indices for positive contexts")
+    negative: List[int] = Field(..., description="List of 0-based indices for negative contexts")
+    irrelevant: List[int] = Field(..., description="List of 0-based indices for irrelevant contexts")   # Optional
 
     @property
     def mapping(self) -> Dict[int, str]:
@@ -54,6 +53,11 @@ class CtxsRelevance:
         ]:
             for idx in idxs:
                 mapping[idx] = label
+        
+        total_len = len(self.positive) + len(self.negative) + len(self.irrelevant)
+        for i in range(total_len):
+            if i not in mapping:
+                mapping[i] = "irrelevant"
         return mapping
     
     @classmethod

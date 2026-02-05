@@ -15,7 +15,6 @@ from src.utils import CtxExample, CtxsRelevance, BoostedProbResult, template, co
 from .conflict_resources import *
 from .conflict_handler import ConflictConfigHandler
 from .lexical_cue import LexicalCueEmbedder
-from .uncertainty_estimator import UncertaintyEstimator
 
 class KnowledgeFusionCore:
     def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
@@ -29,7 +28,6 @@ class KnowledgeFusionCore:
         # Another core components
         self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config)
         # self.lex_cue_embedder = LexicalCueEmbedder(config.model.lexical_cue, self.conflict_handler)
-        # self.uncertainty_estimator = UncertaintyEstimator(config.uncertainty_estimator)
         self.__post_init__()
     
     def set_base_chat_template(self, task: str = "qa"):
@@ -272,9 +270,6 @@ class KnowledgeFusionCore:
         # Quality estimation
         if output_attentions:
             sequences = output.sequences
-            import pdb; pdb.set_trace()
-            # boosted_prob_result = self.uncertainty_estimator.calibrate_inspect(output.scores)\
-            #     if inspect_mode else self.uncertainty_estimator.calibrate(output.scores)
         else:
             sequences = output
 

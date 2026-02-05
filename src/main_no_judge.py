@@ -11,11 +11,10 @@ import os
 
 from KVzip.model import ModelKVzip
 from kfc_model import KnowledgeFusionCore
-from judge_model import CtxsRelevance
 from prompt import ALL_PROMPTS, PSEUDO_PASSAGE_PROMPT, GENERATE_PROMPT
 from utils import (
     setup_logger, load_config, load_relevance_dataset, compute_metrics,
-    MetricResult, RelevanceQAExample
+    MetricResult, RelevanceQAExample, CtxsRelevance
 )
 
 
