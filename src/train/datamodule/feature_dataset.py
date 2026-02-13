@@ -26,7 +26,7 @@ class FeatureDataset(Dataset):
     def __getitem__(self, idx: int):
         item = self.data[idx]
         return {
-            "features": item.features[1:-1, :, 1:], # Use intermediate layers', (entropy, sum) features
+            "features": item.features[..., 1:3], # Use intermediate layers', (entropy, sum) features
             "label": item.label
         }
     

@@ -23,4 +23,5 @@ seed: 42
 
 project_name: conflict_detector
 exp_type: features
-output_dir: /workspaces/kvzip_nlplab/KFC-dev/src/trained_model
+trained_dir: /workspaces/kvzip_nlplab/KFC-dev/src/trained_model
+output_dir: /workspaces/kvzip_nlplab/KFC-dev/src/train_analysis

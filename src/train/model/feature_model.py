@@ -135,7 +135,7 @@ class ConflictFeatureDetectorModule(LightningModule):
         # self.log("val_f1_uk_irr", f1_scores[5], prog_bar=True)
         self.log("val_f1_pos", f1_scores[0], prog_bar=True)
         self.log("val_f1_neg", f1_scores[1], prog_bar=True)
-        self.log("val_f1_irr", f1_scores[2], prog_bar=True)
+        # self.log("val_f1_irr", f1_scores[2], prog_bar=True)
         self.log("val_acc", acc_scores, prog_bar=True)
 
         preds_np = all_preds.numpy()
@@ -155,7 +155,8 @@ class ConflictFeatureDetectorModule(LightningModule):
             y_true=targets_np,
             preds=preds_np,
             # class_names=["K_Pos", "K_Neg", "K_Irr", "UK_Pos", "UK_Neg", "UK_Irr"],
-            class_names=["Pos", "Neg", "Irr"],
+            # class_names=["Pos", "Neg", "Irr"],
+            class_names=["Pos", "Neg"],
             title=f"Confusion Matrix (Epoch {self.current_epoch})"
         )
         wandb_logger.experiment.log({"val_cm": conf_mat_plot, "epoch": self.current_epoch})

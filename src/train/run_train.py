@@ -1,4 +1,4 @@
-from pytorch_lightning import Trainer
+from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
@@ -42,6 +42,7 @@ MODEL_DICT = {
 
 def main():
     cfg = load_config()
+    seed_everything(cfg.seed)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(cfg))
 

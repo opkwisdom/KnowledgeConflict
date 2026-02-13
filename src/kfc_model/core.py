@@ -7,6 +7,7 @@ from transformers import (
     LlamaConfig,
 )
 import json
+import torch.nn.functional as F
 
 from KVzip.model import ModelKVzip
 from KVzip.attention import RetainCache, EvictCache
@@ -16,6 +17,7 @@ from .conflict_resources import *
 from .conflict_handler import ConflictConfigHandler
 from .lexical_cue import LexicalCueEmbedder
 from .uncertainty_estimator import UncertaintyEstimator
+from .conflict_hooker import ConflictHooker
 
 class KnowledgeFusionCore:
     def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
@@ -28,6 +30,7 @@ class KnowledgeFusionCore:
 
         # Another core components
         self.conflict_handler = ConflictConfigHandler(config, kvzip.model.config)
+        self.conflict_hooker = ConflictHooker(self._kvzip.model)
         # self.lex_cue_embedder = LexicalCueEmbedder(config.model.lexical_cue, self.conflict_handler)
         # self.uncertainty_estimator = UncertaintyEstimator(config.uncertainty_estimator)
         self.__post_init__()
@@ -311,42 +314,61 @@ class KnowledgeFusionCore:
             return_idx=True,
             return_irr=True,
         )
+        n_layers = self.model.config.num_hidden_layers
 
         features_dict = {}
+
         # Max, Entropy, Sum features, Hidden states, Logit diff
-        for idx, kv in tagged_all_kv:
-            cross_attention_scores = torch.cat(kv.score, dim=0)
-            max_features = torch.amax(cross_attention_scores, dim=-1)
-            entropy_features = -torch.sum(
-                cross_attention_scores * torch.log(cross_attention_scores + 1e-10),
-                dim=-1
-            )
-            sum_features = torch.sum(cross_attention_scores, dim=-1)
-            
-            # extract conflict hidden and vocab logits
-            input_text = self.generate_prompt.format(question=query)
-            input_ids = self._kvzip.apply_template(input_text)
-            input_ids = input_ids.to(self.device)
-            # if you use forward method, do not concat prefill_ids again
-            outputs = self.model(input_ids, past_key_values=kv, output_hidden_states=True)
+        with self.conflict_hooker:
+            for idx, kv in tagged_all_kv:
+                cross_attention_scores = torch.cat(kv.score, dim=0)
+                entropy_features = -torch.sum(
+                    cross_attention_scores * torch.log(cross_attention_scores + 1e-10),
+                    dim=-1
+                )
+                sum_features = torch.sum(cross_attention_scores, dim=-1)
+                
+                # extract conflict hidden and vocab logits
+                input_text = self.generate_prompt.format(question=query)
+                input_ids = self._kvzip.apply_template(input_text)
+                input_ids = input_ids.to(self.device)
+                # if you use forward method, do not concat prefill_ids again
+                outputs = self.model(input_ids, past_key_values=kv, output_hidden_states=True)
 
-            mid_layer = self.model.config.num_hidden_layers // 2
-            h_mid = outputs.hidden_states[mid_layer][:, -1, :]
-            h_last = outputs.hidden_states[-1][:, -1, :]
+                # hook cache
+                value_norms = []
+                alignments = []
+                for l in range(n_layers):
+                    v_attn, v_ffn, v_norm = self.conflict_hooker.get_cache(layer_idx=l)
+                    norm_attn = v_attn.norm(dim=-1).cpu()
+                    norm_hidden = v_norm.norm(dim=-1).cpu()
+                    value_norms.append((norm_attn / norm_hidden).item())
+                    alignments.append(F.cosine_similarity(v_attn, v_ffn, dim=-1).cpu().item())
 
-            logits_last = self.model.lm_head(h_last)
-            logits_mid = self.model.lm_head(h_mid)
-            logit_diff = logits_last - logits_mid
+                # Get middle and last layer hidden states
+                mid_layer = n_layers // 2
+                h_mid = outputs.hidden_states[mid_layer][:, -1, :]
+                h_last = outputs.hidden_states[-1][:, -1, :]
 
-            # Pack features
-            relevance_type = relevance_map.get(idx, "irrelevant")
-            features = torch.stack([max_features, entropy_features, sum_features,], dim=-1).cpu()   # (layer, head, 3)
+                logits_last = self.model.lm_head(h_last)
+                logits_mid = self.model.lm_head(h_mid)
+                logit_diff = logits_last - logits_mid
 
-            features_dict[relevance_type] = {
-                "features": features,
-                "h_mid": h_mid.squeeze().cpu(),
-                "h_last": h_last.squeeze().cpu(),
-                "logit_diff": logit_diff.squeeze().cpu(),
-            }
+                # Pack features
+                relevance_type = relevance_map.get(idx, "irrelevant")
+                features = torch.stack([entropy_features, sum_features,], dim=-1).cpu()   # (layer, head, 2)
+
+                features_dict[relevance_type] = {
+                    "features": features,
+                    "h_mid": h_mid.squeeze().cpu(),
+                    "h_last": h_last.squeeze().cpu(),
+                    "logit_diff": logit_diff.squeeze().cpu(),
+                    "value_norms": torch.tensor(value_norms),
+                    "alignments": torch.tensor(alignments),
+                }
+                
+                value_norms.clear()
+                alignments.clear()
+                self.conflict_hooker.cache.clear()
 
         return features_dict

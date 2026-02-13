@@ -11,6 +11,7 @@ import os
 import torch
 import numpy as np
 import sys
+import logging
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 proj_root = os.path.abspath(os.path.join(current_dir, "../../"))
@@ -35,26 +36,39 @@ class FeatureExample:
     h_mid: torch.Tensor
     h_last: torch.Tensor
     logit_diff: torch.Tensor
+    value_norms: torch.Tensor
+    alignments: torch.Tensor
     label: int
 
-def _determine_label(is_correct: bool, context_type: str) -> int:
-    # label 0 - Non-conflict
-    # label 1 - Negative conflict
-    # label 2 - Irrelevant noise
-    # label 3 - Positive conflict
-    # label 4 - Failure
-    if is_correct:
-        if context_type == "positive":
-            return 0
-        elif context_type == "negative":
-            return 1
-        else:
-            return 2
+# def _determine_label(is_correct: bool, context_type: str) -> int:
+#     # label 0 - Non-conflict
+#     # label 1 - Negative conflict
+#     # label 2 - Irrelevant noise
+#     # label 3 - Positive conflict
+#     # label 4 - Failure
+#     if is_correct:
+#         if context_type == "positive":
+#             return 0
+#         elif context_type == "negative":
+#             return 1
+#         else:
+#             return 2
+#     else:
+#         if context_type == "positive":
+#             return 3
+#         else:
+#             return 4
+
+def _determine_label(context_type: str) -> int:
+    # label 0 - Positive
+    # label 1 - Negative
+    # label 2 - Irrelevant
+    if context_type == "positive":
+        return 0
+    elif context_type == "negative":
+        return 1
     else:
-        if context_type == "positive":
-            return 3
-        else:
-            return 4
+        return 2
 
 
 def judge_data(
@@ -111,7 +125,7 @@ def extract_features(
             a_internal,
         )
         for k, v in features.items():
-            label = _determine_label(item.is_correct, k)
+            label = _determine_label(k)
             label_counts[label] += 1
 
             feature_example = FeatureExample(
@@ -119,10 +133,12 @@ def extract_features(
                 h_mid=v["h_mid"],
                 h_last=v["h_last"],
                 logit_diff=v["logit_diff"],
+                value_norms=v["value_norms"],
+                alignments=v["alignments"],
                 label=label
             )
             feature_list.append(feature_example)
-    sorted_counts = [label_counts[i] for i in range(5)]
+    sorted_counts = [label_counts[i] for i in range(3)]
     return feature_list, sorted_counts
 
 def judge_and_save(
@@ -130,8 +146,8 @@ def judge_and_save(
     llm_judger: OpenAIJudger,
     data: List[QAExample],
     is_correct_filter: bool = True,
-    logger = None
 ) -> None:
+    logger = logging.getLogger(__name__)
     judged_data = judge_data(config, llm_judger, data, is_correct_filter=is_correct_filter)
     file_name = "judged_data_temp_pos_2.json" if is_correct_filter else "judged_data_temp_neg_2.json"
     temp_save_path = os.path.join(
@@ -142,8 +158,8 @@ def judge_and_save(
         for item in judged_data:
             json_line = json.dumps(asdict(item), ensure_ascii=False)
             f.write(json_line + "\n")
-    if logger:
-        logger.info(f"Saved {len(judged_data)} judged data to {temp_save_path}")
+
+    logger.info(f"Saved {len(judged_data)} judged data to {temp_save_path}")
 
 
 def load_temp_judged_data(
@@ -166,7 +182,8 @@ def load_temp_judged_data(
 def main():
     config = load_config()
     cur_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logger = setup_logger(f"main_{cur_time}", config.output_dir)
+    setup_logger(f"main_{cur_time}", config.output_dir)
+    logger = logging.getLogger(__name__)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(config))
 
@@ -195,11 +212,11 @@ def main():
 
     features, label_counts = extract_features(judged_data, kfc)
     logger.info(f"Extracted {len(features)} feature examples.")
-    for i in range(5):
+    for i in range(len(label_counts)):
         logger.info(f"Label {i} - {label_counts[i]}")
     feature_save_path = os.path.join(
         os.path.dirname(config.data.data_path),
-        "train_features_enhanced.pt"
+        "train_features_va.pt"
     )
     torch.save(features, feature_save_path)
 

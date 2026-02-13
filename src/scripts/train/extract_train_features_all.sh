@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 # PROJ_ROOT="/workspaces/kvzip_nlplab/KFC-dev"
 export PYTHONPATH=$PWD:$PYTHONPATH
