@@ -20,29 +20,29 @@ def load_config() -> DictConfig:
     return config
 
 
-def setup_logger(name, log_dir: str, level=logging.INFO) -> logging.Logger:
+def setup_logger(name: str, log_dir: str, level=logging.INFO) -> None:
     """Function to setup a logger; creates file and console handlers."""
     os.makedirs(log_dir, exist_ok=True)
     log_file = f"{log_dir}/{name}.log"
     
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    root_logger.setLevel(level)
+
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    # Formatter
+    formatter = logging.Formatter('[%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s] - %(message)s')
 
     # File handler
     fh = logging.FileHandler(log_file)
     fh.setLevel(level)
+    fh.setFormatter(formatter)
+    root_logger.addHandler(fh)
 
     # Console handler
     ch = logging.StreamHandler()
     ch.setLevel(level)
-
-    # Formatter
-    formatter = logging.Formatter('[%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s] - %(message)s')
-    fh.setFormatter(formatter)
     ch.setFormatter(formatter)
-
-    # Add handlers to logger
-    logger.addHandler(fh)
-    logger.addHandler(ch)
-
-    return logger
+    root_logger.addHandler(ch)

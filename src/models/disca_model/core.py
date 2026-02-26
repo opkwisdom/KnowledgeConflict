@@ -16,7 +16,7 @@ from .conflict_resources import *
 from .conflict_handler import ConflictConfigHandler
 from .lexical_cue import LexicalCueEmbedder
 
-class KnowledgeFusionCore:
+class DISCA:
     def __init__(self, config: DictConfig, kvzip: ModelKVzip, generate_prompt: str, base_prompt: str, logger: logging.Logger) -> None:
         self.config: DictConfig = config
         self._kvzip: ModelKVzip = kvzip

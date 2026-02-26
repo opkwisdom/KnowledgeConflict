@@ -59,7 +59,7 @@ def load_head_score(model_name, ctx_len):
 
 
 class ModelKVzip():
-    def __init__(self, model_name: str, kv_type: str = "evict", gen_kwargs: dict = None, prompt: str = "", logger=None):
+    def __init__(self, model_name: str, kv_type: str = "evict", gen_kwargs: dict = None, prompt: str = ""):
         self.model, self.tokenizer = load_model(model_name)
 
         self.name = self.model.name
@@ -68,7 +68,6 @@ class ModelKVzip():
         self.config = self.model.config
         self.prompt = prompt    # Prompt for KV scoring
         self.raw_score = None
-        self.logger = logger
 
         if isinstance(self.model, LlamaForCausalLMW8A8):
             self.kv_type = "int4static"
@@ -97,10 +96,12 @@ class ModelKVzip():
             self.gen_kwargs["eos_token_id"] = 151645
 
         self.set_chat_template()
-
-    def encode(self, text: str) -> torch.Tensor:
+    
+    # TODO: opkwisdom
+    def encode(self, text: Union[str, List[str]]) -> torch.Tensor:
         """ Encode text into tokens
         """
+        import pdb; pdb.set_trace()
         return self.tokenizer.encode(text, add_special_tokens=False, return_tensors="pt").cuda()
 
     def decode(self, input_ids: torch.Tensor) -> str:
