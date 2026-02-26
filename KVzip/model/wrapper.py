@@ -97,12 +97,20 @@ class ModelKVzip():
 
         self.set_chat_template()
     
-    # TODO: opkwisdom
+    # TODO: opkwisdom - enable batch encoding
     def encode(self, text: Union[str, List[str]]) -> torch.Tensor:
         """ Encode text into tokens
         """
-        import pdb; pdb.set_trace()
-        return self.tokenizer.encode(text, add_special_tokens=False, return_tensors="pt").cuda()
+        if isinstance(text, str):
+            text = [text]
+        
+        encoded = self.tokenizer(
+            text,
+            add_special_tokens=False,
+            return_tensors="pt",
+            padding=True,
+        )
+        return encoded.input_ids.to(self.device)
 
     def decode(self, input_ids: torch.Tensor) -> str:
         """ Decode tokens into text

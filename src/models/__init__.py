@@ -1,4 +1,4 @@
 from .disca_model import DISCA
-from .kv_former import SingleHiddenKVFormer
+from .sca_former import SingleHiddenSCAFormer, MultiHiddenSCAFormer, SCAFormerClassifier
 
-__all__ = ["DISCA", "SingleHiddenKVFormer"]
+__all__ = ["DISCA", "SingleHiddenSCAFormer", "MultiHiddenSCAFormer", "SCAFormerClassifier"]

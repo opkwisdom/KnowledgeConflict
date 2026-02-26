@@ -1,4 +1,4 @@
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, fields
 from typing import Any, Dict, List, Optional, Union
 import json
 import os
@@ -56,15 +56,33 @@ class CtxsRelevance:
 @dataclass
 class RelevanceQAExample(QAExample):
     ctx_relevance: CtxsRelevance = field(default_factory=CtxsRelevance)
+    is_correct: Optional[bool] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RelevanceQAExample":
         data = data.copy()
         raw_ctxs = data.pop("ctxs", [])
         ctxs_obj = [CtxExample(**ctx) for ctx in raw_ctxs]
+        
         raw_relevance = data.pop("ctx_relevance", {})
-        relevance_obj = CtxsRelevance(**raw_relevance)
-        return cls(ctxs=ctxs_obj, ctx_relevance=relevance_obj, **data)
+        is_mapping = False
+        if raw_relevance:
+            first_key = next(iter(raw_relevance.keys()))
+            if isinstance(first_key, (int, str)) and str(first_key).isdigit():
+                is_mapping = True
+        
+        if is_mapping:
+            relevance_data = {"positive": [], "negative": [], "irrelevant": []}
+            for idx, label in raw_relevance.items():
+                relevance_data[label].append(int(idx))
+            relevance_obj = CtxsRelevance(**relevance_data)
+        else:
+            relevance_obj = CtxsRelevance(**raw_relevance)
+        
+        valid_fields = {f.name for f in fields(cls)}
+        init_kwargs = {k: v for k, v in data.items() if k in valid_fields}
+
+        return cls(ctxs=ctxs_obj, ctx_relevance=relevance_obj, **init_kwargs)
 
     @classmethod
     def from_qa_example(cls, qa_example: QAExample, ctx_relevance: CtxsRelevance) -> "RelevanceQAExample":

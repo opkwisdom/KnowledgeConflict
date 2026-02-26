@@ -1,8 +1,11 @@
 data:
   name: nq
-  data_path: data/nq/parametric_relevance_tagged/validation.json
+  data_path: data/train/train_data.json
   max_seq_length: 1024
   use_single_context: True
+
+  batch_size: 4
+  topk_per_query: 8
 
 model:
   model_name: meta-llama/Llama-3.1-8B-Instruct
@@ -12,6 +15,13 @@ model:
     top_p: 1
     top_k: null
     max_new_tokens: 32
+  hidden_extraction_layers:
+    - 20
+
+scaformer:
+  model_name_or_path: roberta-base
+  query_length: 8
+  llm_width:    # Post initialized
 
 self_task_prompt_name: base
 generate_prompt_name: base

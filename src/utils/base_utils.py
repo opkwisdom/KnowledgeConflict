@@ -46,3 +46,4 @@ def setup_logger(name: str, log_dir: str, level=logging.INFO) -> None:
     ch.setLevel(level)
     ch.setFormatter(formatter)
     root_logger.addHandler(ch)
+    root_logger.info(f"Logger initialized. Logs will be saved to {log_file}")
