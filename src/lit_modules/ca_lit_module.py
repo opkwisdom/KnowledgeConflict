@@ -8,18 +8,18 @@ from omegaconf import DictConfig
 from torchmetrics import ConfusionMatrix, F1Score, Accuracy
 from transformers import get_linear_schedule_with_warmup
 
-from models import DISCA, SimpleDISCA, KVFormer
+from models import DISCA, SingleHiddenCAFormer, MultiHiddenCAFormer
 
 logger = logging.getLogger(__name__)
 
 
-class SCALightningModule(LightningModule):
-    def __init__(self, cfg: DictConfig, disca: Union[DISCA, SimpleDISCA], kv_former: KVFormer):
+class CAFormerLightningModule(LightningModule):
+    def __init__(self, cfg: DictConfig, disca: DISCA, caformer: Union[SingleHiddenCAFormer, MultiHiddenCAFormer]):
         super().__init__()
-        self.save_hyperparameters(ignore=["disca", "kv_former"])
+        self.save_hyperparameters(ignore=["disca", "caformer"])
 
         self.disca = disca
-        self.kv_former = kv_former
+        self.caformer = caformer
         self.cfg = cfg
         self.learning_rate = cfg.learning_rate
         self.prepare_modules()
@@ -28,7 +28,7 @@ class SCALightningModule(LightningModule):
         self.disca.eval()
         for param in self.disca.parameters():
             param.requires_grad = False
-        self.kv_former.train()
+        self.caformer.train()
 
     def forward(self, batch):
         pass

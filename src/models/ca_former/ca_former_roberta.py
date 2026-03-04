@@ -431,7 +431,6 @@ class RobertaLayer(nn.Module):
 
         outputs = self_attention_outputs[1:-1]
         present_key_value = self_attention_outputs[-1]
-
         if query_length > 0:
             query_attention_output = attention_output[:, :query_length, :]
 
@@ -918,7 +917,6 @@ class RobertaModel(RobertaPreTrainedModel):
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
-        import pdb; pdb.set_trace()
         if is_decoder:
             extended_attention_mask = self.get_extended_attention_mask(
                 attention_mask,

@@ -5,7 +5,8 @@ data:
   use_single_context: True
 
   batch_size: 4
-  topk_per_query: 8
+  topk_per_query:   # Default: 10
+  test_size: 0.2
 
 model:
   model_name: meta-llama/Llama-3.1-8B-Instruct
@@ -18,10 +19,13 @@ model:
   hidden_extraction_layers:
     - 20
 
-scaformer:
+caformer:
   model_name_or_path: roberta-base
   query_length: 8
   llm_width:    # Post initialized
+
+  pooling_strategy: mean
+  dropout: 0.1
 
 self_task_prompt_name: base
 generate_prompt_name: base

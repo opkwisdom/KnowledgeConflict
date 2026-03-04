@@ -1,7 +1,7 @@
 from transformers import RobertaConfig
 
-class SCAFormerConfig(RobertaConfig):
-    model_type = "scaformer"
+class CAFormerConfig(RobertaConfig):
+    model_type = "caformer"
     
     def __init__(
         self,
@@ -19,5 +19,5 @@ class SCAFormerConfig(RobertaConfig):
         self.query_length = query_length
         self.llm_width = llm_width
 
-config = SCAFormerConfig.from_pretrained("roberta-base")
+config = CAFormerConfig.from_pretrained("roberta-base")
 print(config)

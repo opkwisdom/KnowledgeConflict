@@ -111,8 +111,8 @@ class DISCA:
         """
         Self-Generated Conflict Amplification (SCA) pipeline
         Returns:
-            kvformer_input: Tensor of shape (B, L_select, S, D)
-            kvformer_mask: Tensor of shape (B, S)
+            caformer_input: Tensor of shape (B, L_select, S, D)
+            caformer_mask: Tensor of shape (B, S)
         """
         a_int_list = self.generate_internal_answers(queries)
         
@@ -144,15 +144,15 @@ class DISCA:
             for layer_idx in self.hidden_extraction_layers
         ]
         selected_hiddens = torch.stack(selected_hiddens, dim=1)     # (B, L_select, S, D)
-        kvformer_input = selected_hiddens[:, :, -max_target_length:, :]
-        kvformer_mask = torch.zeros_like(kvformer_input[:, 0, :, 0], dtype=torch.long).to(self.device)
+        caformer_input = selected_hiddens[:, :, -max_target_length:, :]
+        caformer_mask = torch.zeros_like(caformer_input[:, 0, :, 0], dtype=torch.long).to(self.device)
         
         for i, target_length in enumerate(target_length_list):
             start_idx = i * self.config.data.topk_per_query
             end_idx = start_idx + self.config.data.topk_per_query
-            kvformer_mask[start_idx:end_idx, -target_length:] = 1
+            caformer_mask[start_idx:end_idx, -target_length:] = 1
         
-        return kvformer_input, kvformer_mask
+        return caformer_input, caformer_mask
     
     @torch.inference_mode()
     def generate_internal_answers(

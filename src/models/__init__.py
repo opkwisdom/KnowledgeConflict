@@ -1,4 +1,4 @@
 from .disca_model import DISCA
-from .sca_former import SingleHiddenSCAFormer, MultiHiddenSCAFormer, SCAFormerClassifier
+from .ca_former import SingleHiddenCAFormer, MultiHiddenCAFormer, CAFormerClassifier
 
-__all__ = ["DISCA", "SingleHiddenSCAFormer", "MultiHiddenSCAFormer", "SCAFormerClassifier"]
+__all__ = ["DISCA", "SingleHiddenCAFormer", "MultiHiddenCAFormer", "CAFormerClassifier"]
