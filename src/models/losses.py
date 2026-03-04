@@ -2,6 +2,9 @@ import torch
 import torch.nn.functional as F
 
 class ContrastiveLoss(torch.nn.Module):
+    """
+    Custom SupCon loss for S/C/I labeling dataset.
+    """
     def __init__(self, T: float = 1.0):
         super().__init__()
         self.T = T

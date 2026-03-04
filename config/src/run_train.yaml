@@ -4,9 +4,11 @@ data:
   max_seq_length: 1024
   use_single_context: True
 
-  batch_size: 8
-  topk_per_query:   # Default: 10
-  test_size: 0.2
+  batch_size: 4
+  num_workers: 16
+  topk_per_query: 10
+  test_size: 0.1
+  seed: 42
 
 model:
   model_name: meta-llama/Llama-3.1-8B-Instruct
@@ -27,9 +29,20 @@ caformer:
   pooling_strategy: mean
   dropout: 0.1
 
+train:
+  learning_rate: 2e-5
+  warmup_ratio: 0.01
+  max_epochs: 10
+  temperature:
+  ctr_loss_weight: 1.0
+
+seed: 42
+debug_mode: False
+
 self_task_prompt_name: base
 generate_prompt_name: base
-base_prompt_name: pure-llm-brief-2 
-output_dir: src/results/tests/disca
-task: base
-experiment_name:
+base_prompt_name: pure-llm-brief-2
+
+output_dir: /workspaces/kvzip_nlplab/checkpoint
+project_name: caformer
+exp_type: single

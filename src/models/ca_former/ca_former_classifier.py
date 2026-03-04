@@ -22,7 +22,11 @@ class CAFormerClassifier(nn.Module):
 
     def pooling(self, query_hidden_states: torch.FloatTensor):
         if self.config.caformer.pooling_strategy == "mean":
+            # mean pooling
             pooled_output = query_hidden_states.mean(dim=1)
+        elif self.config.caformer.pooling_strategy == "max":
+            # most reactive token
+            pooled_output = query_hidden_states.max(dim=1).values
         else:
             raise NotImplementedError(f"Pooling strategy {self.config.caformer.pooling_strategy} not implemented.")
         return pooled_output

@@ -21,7 +21,7 @@ class CADataset(Dataset):
     def __init__(self, data: List[torch.Tensor], cfg: DictConfig):
         self.data = data
         self.cfg = cfg
-        self.topk_per_query = getattr(cfg, "topk_per_query", 10)
+        self.topk_per_query = getattr(cfg, "topk_per_query", None) or 10
     
     def __len__(self):
         return len(self.data)
@@ -31,7 +31,8 @@ class CADataset(Dataset):
         query = item.question
         ctxs = item.ctxs[:self.topk_per_query]
         relevance_mapping = item.ctx_relevance.mapping
-        labels = [RELEVANCE_MAPPING[v] for k, v in list(relevance_mapping.items())[:self.topk_per_query]]
+        labels = [RELEVANCE_MAPPING.get(v, "irrelevant") for k, v \
+                  in list(relevance_mapping.items())[:self.topk_per_query]]
         return query, ctxs, labels
     
 
@@ -44,7 +45,7 @@ class CADataModule(LightningDataModule):
     
     def setup(self, stage: Optional[str] = None):
         full_data = load_relevance_dataset(self.cfg.data_path)
-        train_data, val_data = train_test_split(full_data, test_size=0.2, random_state=42)
+        train_data, val_data = train_test_split(full_data, test_size=self.cfg.test_size, random_state=self.cfg.seed)
         if stage == 'fit' or stage is None:
             self.train_dataset = CADataset(train_data, self.cfg)
             self.val_dataset = CADataset(val_data, self.cfg)
@@ -53,12 +54,21 @@ class CADataModule(LightningDataModule):
         else:
             raise ValueError(f"Unknown stage: {stage}")
     
+    def collate_fn(self, batch):
+        queries, ctxs_list, labels_list = zip(*batch)
+        return {
+            "queries": list(queries),
+            "ctxs_list": list(ctxs_list),
+            "labels_tensor": torch.tensor(list(labels_list), dtype=torch.long).reshape(-1)  # (B*N_{docs},)
+        }
+
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers, 
-            shuffle=True
+            shuffle=True,
+            collate_fn=self.collate_fn
         )
     
     def val_dataloader(self):
@@ -66,5 +76,6 @@ class CADataModule(LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            shuffle=False
+            shuffle=False,
+            collate_fn=self.collate_fn
         )

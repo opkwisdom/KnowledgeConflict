@@ -1,2 +1,2 @@
 # from .core import DISCA
-from .simple_core import DISCA
+from .core import DISCA
