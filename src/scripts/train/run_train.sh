@@ -9,10 +9,13 @@ CONFIG_PATH=$1
 ### Hyperparameter search space ###
 LAYERS=(16 20 24)
 CTR_WEIGHTS=(1.0 0.5 0.0)
-LEARNING_RATES=(1e-5 2e-5 5e-5)
+LEARNING_RATES=(5e-5 2e-5 1e-5)
 POOLING_STRATEGIES=(mean max)
 QUERY_LENGTHS=(4 8 16 32)
 
+# Debugging
+# python3 src/run_train.py \
+#     --config $CONFIG_PATH
 
 # Step 1: CTR loss influence & Learning rate investigation
 echo "Starting Step 1: Core Hyperparams Investigation at $(date)"

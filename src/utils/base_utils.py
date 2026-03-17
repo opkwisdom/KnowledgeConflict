@@ -46,4 +46,20 @@ def setup_logger(name: str, log_dir: str, level=logging.INFO) -> None:
     ch.setLevel(level)
     ch.setFormatter(formatter)
     root_logger.addHandler(ch)
+
+    vllm_logger = logging.getLogger("vllm")
+    vllm_logger.setLevel(logging.WARNING)
+    vllm_logger.propagate = False   # Prevent vLLM logs from propagating to the root logger
     root_logger.info(f"Logger initialized. Logs will be saved to {log_file}")
+
+def setup_seed(seed: int) -> None:
+    """Set random seed for reproducibility."""
+    import random
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)

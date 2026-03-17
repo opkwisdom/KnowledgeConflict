@@ -11,7 +11,9 @@ from utils import load_relevance_dataset
 
 RELEVANCE_MAPPING = {
     "positive": 0,
+    "supportive": 0,
     "negative": 1,
+    "contradictory": 1,
     "irrelevant": 2
 }
 
@@ -33,6 +35,8 @@ class CADataset(Dataset):
         relevance_mapping = item.ctx_relevance.mapping
         labels = [RELEVANCE_MAPPING.get(v, "irrelevant") for k, v \
                   in list(relevance_mapping.items())[:self.topk_per_query]]
+        if len(labels) < self.topk_per_query:
+            labels.extend([2] * (self.topk_per_query - len(labels)))
         return query, ctxs, labels
     
 

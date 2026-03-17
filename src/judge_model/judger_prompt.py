@@ -203,6 +203,91 @@ OPENAI = {
             "Provide the output strictly using the provided JSON schema."
         )
     },
+    "judge_only_contexts_sci": {
+        "system": (
+            "You are a strict evaluator for a Knowledge Conflict Resolution system.\n"
+            "Evaluate the logical relationship between the provided Context and a Reference Answer regarding a specific Query.\n"
+        ),
+        "user": (
+            "### Task Description\n"
+            "Classify EACH context (from [0] to [{last_index}]) into one of three strict categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "1. **Supportive (S)**: The context contains the exact facts or explicit evidence that perfectly aligns with the Reference Answer.\n"
+            "2. **Contradictory (C)**: The context directly opposes, denies, or provides mutually exclusive factual information against the Reference Answer. It MUST actively claim a different truth.\n"
+            "3. **Irrelevant (I)**: The context fails to provide a direct answer, only shares superficial keywords, or is completely off-topic.\n\n"
+
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Reference Answer: {true_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Provide the output strictly using the provided JSON schema."
+        )
+    },
+    "judge_only_contexts_sci_reasoning": {
+        "system": (
+            "You are a strict evaluator for a Knowledge Conflict Resolution system.\n"
+            "Evaluate the logical relationship between the provided Context and a Reference Answer regarding a specific Query.\n"
+        ),
+        "user": (
+            "### Task Description\n"
+            "Classify EACH context (from [0] to [{last_index}]) into one of three strict categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "1. **Supportive (S)**: The context contains facts or evidence that support or align with the Reference Answer.\n"
+            "2. **Contradictory (C)**: The context provides factual information that is mutually exclusive to, or logically conflicts with the Reference Answer.\n"
+            "   *(CRITICAL: The context MUST be about the EXACT SAME entity/topic as the Query. If the query asks about 'Season 12' and the context describes 'Season 13', it is NOT a contradiction, but Irrelevant.)*\n"
+            "3. **Irrelevant (I)**: The context fails to provide a direct answer, only shares superficial keywords, or is off-topic.\n\n"
+
+            "### Special Instruction for Reasoning\n"
+            "When writing your `reasoning`, if the Reference Answer or Context contains dates, years, or centuries, you MUST explicitly convert "
+            "and compare their actual year ranges (e.g., \"16th century = 1501-1600, which does not match 1607\") before classifying."
+
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Reference Answer: {ref_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Provide the output strictly using the provided JSON schema. Crucially, you MUST first use the reasoning field "
+            "to write down a step-by-step logical explanation of why each context belongs to S, C, or I before assigning their indices."
+        )
+    },
+    "judge_few_shot_anchor_v2": {
+        "system": (
+            "You are a strict evaluator for a Knowledge Conflict Resolution system.\n"
+            "Evaluate the logical relationship between the provided Context and a Reference Answer regarding a specific Query. "
+            "You MUST follow a strict step-by-step logical gating process."
+        ),
+        "user": (
+            "### Step-by-Step Classification Rules\n"
+            "Classify EACH context (from [0] to [{last_index}]) into one of three strict categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "**Step 1: Entity & Topic Match (The Gating Rule)**\n"
+            "Does the context discuss the EXACT SAME entity, event, and temporal scope as the Query and Reference Answer?\n"
+            "- If No: Stop and Classify as **Irrelevant (I)**. (e.g., Query is about 'Season 12', context discusses 'Season 13').\n"
+            "- If Yes: Move to Step 2.\n\n"
+            "**Step 2: Fact Check & Alignment**\n"
+            "Compare the specific facts in the context against the Reference Answer.\n"
+            "- If the context provides facts that are mutually exclusive to or logically conflict with the Reference Answer: Classify as **Contradictory (C)**.\n"
+            "- If the context contains facts or evidence that support or align with the Reference Answer: Classify as **Supportive (S)**.\n"
+            "- If the context fails to provide a direct answer to the query, or only shares superficial keywords: Classify as **Irrelevant (I)**.\n\n"
+            
+            "### Anchor Examples (STUDY THESE CAREFULLY)\n"
+            "You MUST output your final answer as a JSON object with an 'evaluations' list. Follow this structure:\n\n"
+            
+            "**[Example Scenarios]**\n"
+            "- Query: When is the finale of season 12?\n"
+            "- Reference Answer: Sept 18.\n"
+            "- Contexts:\n"
+            "[0] Season 13 finale was on Sept 19.\n"
+            "[1] The 12th season ended on September 18th.\n"
+            "[2] The 12th season finale aired on October 1st.\n"
+            "[3] The show was renewed for a 12th season.\n\n"
+            
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Reference Answer: {ref_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Analyze ALL contexts from [0] to [{last_index}] using the Step-by-Step rules. Return ONLY a valid JSON object matching the expected schema."
+        )
+    }
 }
 
 
@@ -233,6 +318,145 @@ HUGGINGFACE = {
             "{formatted_contexts}\n\n"
             
             "Analyze the data and provide the structured evaluation."
+        )
+    },
+    "judge_only_contexts_sci": {
+        "system": (
+            "You are a strict evaluator for a Knowledge Conflict Resolution system.\n"
+            "Evaluate the logical relationship between the provided Context and a Reference Answer regarding a specific Query.\n"
+        ),
+        "user": (
+            "### Task Description\n"
+            "Classify EACH context (from [0] to [{last_index}]) into one of three strict categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "1. **Supportive (S)**: The context contains facts or evidence that support or align with the Reference Answer.\n"
+            "2. **Contradictory (C)**: The context provides factual information that is mutually exclusive to, or logically conflicts with the Reference Answer.\n"
+            "3. **Irrelevant (I)**: The context fails to provide a direct answer, only shares superficial keywords, or is off-topic.\n\n"
+
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Reference Answer: {ref_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Provide the output strictly using the provided JSON schema."
+        )
+    },
+    "judge_only_contexts_sci_reasoning": {
+        "system": (
+            "You are a strict evaluator for a Knowledge Conflict Resolution system.\n"
+            "Evaluate the logical relationship between the provided Context and a Reference Answer regarding a specific Query.\n"
+        ),
+        "user": (
+            "### Task Description\n"
+            "Classify EACH context (from [0] to [{last_index}]) into one of three strict categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "1. **Supportive (S)**: The context contains facts or evidence that support or align with the Reference Answer.\n"
+            "2. **Contradictory (C)**: The context provides factual information that is mutually exclusive to, or logically conflicts with the Reference Answer.\n"
+            "   *(CRITICAL: The context MUST be about the EXACT SAME entity/topic as the Query. If the query asks about 'Season 12' and the context describes 'Season 13', it is NOT a contradiction, but Irrelevant.)*\n"
+            "3. **Irrelevant (I)**: The context fails to provide a direct answer, only shares superficial keywords, or is off-topic.\n\n"
+
+            "### Special Instruction for Reasoning\n"
+            "When writing your `reasoning`, if the Reference Answer or Context contains dates, years, or centuries, you MUST explicitly convert "
+            "and compare their actual year ranges (e.g., \"16th century = 1501-1600, which does not match 1607\") before classifying."
+
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Reference Answer: {ref_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Provide the output strictly using the provided JSON schema. Crucially, you MUST first use the reasoning field "
+            "to write down a step-by-step logical explanation of why each context belongs to S, C, or I before assigning their indices."
+        )
+    },
+    "judge_few_shot_anchor": {
+        "system": (
+            "You are a strict evaluator for a Knowledge Conflict Resolution system.\n"
+            "Evaluate the logical relationship between the provided Context and a Reference Answer regarding a specific Query.\n"
+        ),
+        "user": (
+            "### Classification Rules\n"
+            "Classify EACH context (from [0] to [{last_index}]) into one of three strict categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "1. **Supportive (S)**: The context contains facts or evidence that support or align with the Reference Answer.\n"
+            "2. **Contradictory (C)**: The context provides factual information that is mutually exclusive to, or logically conflicts with the Reference Answer.\n"
+            "   *(CRITICAL: The context MUST be about the EXACT SAME entity/topic as the Query. If the query asks about 'Season 12' and the context describes 'Season 13', it is NOT a contradiction, but Irrelevant.)*\n"
+            "3. **Irrelevant (I)**: The context fails to provide a direct answer, only shares superficial keywords, or is off-topic.\n\n"
+            
+            "### Anchor Examples (STUDY THESE CAREFULLY)\n"
+            
+            "**[Example A - Entity Mismatch]**\n"
+            "- Query: When is the finale of season 12?\n"
+            "- Reference Answer: Sept 18.\n"
+            "- Context: Season 13 finale was on Sept 19.\n"
+            "-> Reasoning: The context discusses Season 13, not 12. Different entity.\n"
+            "Classification: I.\n\n"
+            
+            "**[Example B - Temporal Conflict]**\n"
+            "- Query: When did the first colony start?\n"
+            "- Reference Answer: 16th century.\n"
+            "- Context: Jamestown started in 1607.\n"
+            "-> Reasoning: 1607 is the 17th century. The reference claims 16th. These are mutually exclusive for the same event.\n"
+            "Classification: C.\n\n"
+            
+            "**[Example 3 - Fact Alignment]**\n"
+            "- Query: Who wrote Hamlet?\n"
+            "- Reference Answer: William Shakespeare.\n"
+            "- Context: Hamlet is a tragedy written by English playwright William Shakespeare in the early 1600s.\n"
+            "-> Reasoning: The context explicitly states Shakespeare wrote Hamlet, which perfectly aligns with the reference answer.\n"
+            "Classification: S.\n\n"
+            
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Reference Answer: {ref_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Provide your step-by-step reasoning first, mirroring the Anchor Examples logic, then assign the category."
+        )
+    },
+    "judge_few_shot_anchor_v2": {
+        "system": (
+            "You are a strict evaluator for a Knowledge Conflict Resolution system.\n"
+            "Evaluate the logical relationship between the provided Context and a Reference Answer regarding a specific Query. "
+            "You MUST follow a strict step-by-step logical gating process."
+        ),
+        "user": (
+            "### Step-by-Step Classification Rules\n"
+            "Classify EACH context (from [0] to [{last_index}]) into one of three strict categories based on the following rules. "
+            "DO NOT skip any context:\n\n"
+            "**Step 1: Entity & Topic Match (The Gating Rule)**\n"
+            "Does the context discuss the EXACT SAME entity, event, and temporal scope as the Query and Reference Answer?\n"
+            "- If No: Stop and Classify as **Irrelevant (I)**. (e.g., Query is about 'Season 12', context discusses 'Season 13').\n"
+            "- If Yes: Move to Step 2.\n\n"
+            "**Step 2: Fact Check & Alignment**\n"
+            "Compare the specific facts in the context against the Reference Answer.\n"
+            "- If the context provides facts that are mutually exclusive to or logically conflict with the Reference Answer: Classify as **Contradictory (C)**.\n"
+            "- If the context contains facts or evidence that support or align with the Reference Answer: Classify as **Supportive (S)**.\n"
+            "- If the context fails to provide a direct answer to the query, or only shares superficial keywords: Classify as **Irrelevant (I)**.\n\n"
+            
+            "### Anchor Examples (STUDY THESE CAREFULLY)\n"
+            "You MUST output your final answer as a JSON object with an 'evaluations' list. Follow this structure:\n\n"
+            
+            "**[Example Scenarios]**\n"
+            "- Query: When is the finale of season 12?\n"
+            "- Reference Answer: Sept 18.\n"
+            "- Contexts:\n"
+            "[0] Season 13 finale was on Sept 19.\n"
+            "[1] The 12th season ended on September 18th.\n"
+            "[2] The 12th season finale aired on October 1st.\n"
+            "[3] The show was renewed for a 12th season.\n\n"
+            
+            "-> Expected JSON Output:\n"
+            "{{\n"
+            "  \"evaluations\": [\n"
+            "    {{\"index\": 0, \"reasoning\": \"Step 1 Fails: Discusses Season 13, not 12. Different entity.\", \"category\": \"I\"}},\n"
+            "    {{\"index\": 1, \"reasoning\": \"Step 1 Passes. Step 2: Explicitly states season 12 ended on Sept 18, matching reference.\", \"category\": \"S\"}},\n"
+            "    {{\"index\": 2, \"reasoning\": \"Step 1 Passes. Step 2: Oct 1st contradicts the reference date of Sept 18.\", \"category\": \"C\"}},\n"
+            "    {{\"index\": 3, \"reasoning\": \"Step 1 Passes. Step 2: Mentions season 12 but gives no air date. Superficial.\", \"category\": \"I\"}}\n"
+            "  ]\n"
+            "}}\n\n"
+            
+            "### Input\n"
+            "- Query: {query}\n"
+            "- Reference Answer: {ref_answer}\n"
+            "- Contexts:\n{formatted_contexts}\n\n"
+            "Analyze ALL contexts from [0] to [{last_index}] using the Step-by-Step rules. Return ONLY a valid JSON object matching the expected schema."
         )
     }
 }

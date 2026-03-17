@@ -100,7 +100,8 @@ class DISCA:
 
         # TODO: SCA batch prompt construction
         for i, (q_text, a_int, ctx_list) in enumerate(zip(queries, a_int_list, contexts_list)):
-            self_task_prompt = f"{q_text}\n\n{a_int}\n\n{self_task_prompt_text}{self.postfix_text}{a_int}"
+            # self_task_prompt = f"{q_text}\n\n{a_int}\n\n{self_task_prompt_text}{self.postfix_text}{a_int}"    # Prepend the internal answer (Teacher-forcing style)
+            self_task_prompt = f"{q_text}\n\n{self_task_prompt_text}{self.postfix_text}{a_int}"                 # Auto-regressive style
             self_task_prompt_ids = self.encode(self_task_prompt)[0]
             
             # Keep track of variable target lengths across different samples

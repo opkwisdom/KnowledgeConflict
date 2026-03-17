@@ -1,63 +1,38 @@
 import torch
 from abc import ABC, abstractmethod
-from typing import List, Dict
+from typing import List, Dict, Literal
 from pydantic import BaseModel, Field
 from omegaconf import DictConfig
 
-class CtxsRelevance(BaseModel):
-    positive: List[int] = Field(..., description="List of 0-based indices for positive contexts")
-    negative: List[int] = Field(..., description="List of 0-based indices for negative contexts")
-    irrelevant: List[int] = Field(..., description="List of 0-based indices for irrelevant contexts")   # Optional
+from utils import CtxsRelevance
 
-    @property
-    def mapping(self) -> Dict[int, str]:
-        mapping = {}
-        for label, idxs in [
-            ("positive", self.positive),
-            ("negative", self.negative),
-            ("irrelevant", self.irrelevant),
-        ]:
-            for idx in idxs:
-                mapping[idx] = label
-        
-        total_len = len(self.positive) + len(self.negative) + len(self.irrelevant)
-        for i in range(total_len):
-            if i not in mapping:
-                mapping[i] = "irrelevant"
-        return mapping
 
-    # @property
-    # def mapping(self) -> Dict[int, str]:
-    #     mapping = {}
-    #     for idx in self.positive:
-    #         mapping[idx] = "positive"
-    #     for idx in self.negative:
-    #         mapping[idx] = "negative"
-    #     # irrelevant는 맵핑에 없으면 그냥 없는 것으로 간주하거나,
-    #     # 필요하다면 외부에서 전체 길이를 알 때 처리 (여기서는 생략)
-    #     if 0 not in mapping:
-    #         mapping[0] = "irrelevant"
-            
-    #     return mapping
+class ContextEvaluation(BaseModel):
+    index: int = Field(..., description="The index of the context being evaluated (e.g., 0, 1, 2).")
+    reasoning: str = Field(..., description="A single, concise reason why this context is S, C, or I in max 20 words.")
+    category: Literal["S", "C", "I"] = Field(..., description="The strict category classification.")
+
+class CtxsRelevanceParser(BaseModel):
+    evaluations: List[ContextEvaluation] = Field(..., description="A complete list of evaluations for EVERY context provided. You must include all indices.")
     
-    @classmethod
-    def from_mapping(cls, mapping_data: Dict[str, str]) -> "CtxsRelevance":
-        pos, neg, irr = [], [], []
-        
-        # JSON에서 키가 문자열로 들어올 수 있으므로 int 변환 처리
-        for idx_str, label in mapping_data.items():
-            idx = int(idx_str) 
-            if label == "positive":
-                pos.append(idx)
-            elif label == "negative":
-                neg.append(idx)
-            elif label == "irrelevant":
-                irr.append(idx)
-        
-        return cls(positive=pos, negative=neg, irrelevant=irr)
+    def to_dataclass(self) -> "CtxsRelevance":
+        sup, ctd, irr = [], [], []
+        for eval in self.evaluations:
+            if eval.category == "S":
+                sup.append(eval.index)
+            elif eval.category == "C":
+                ctd.append(eval.index)
+            elif eval.category == "I":
+                irr.append(eval.index)
+
+        return CtxsRelevance(
+            supportive=sup,
+            contradictory=ctd,
+            irrelevant=irr
+        )
+
 
 class JudgeOutput(BaseModel):
-    is_correct: bool = Field(..., description="Whether the answer is judged correct or not")
     ctx_relevance: CtxsRelevance = Field(..., description="Contextual relevance information")
 
 
@@ -69,6 +44,7 @@ class LLMJudger(ABC):
     def __init__(self, config: DictConfig):
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else -1
         self._init_llm()
 
     @abstractmethod
@@ -80,5 +56,5 @@ class LLMJudger(ABC):
         raise NotImplementedError
     
     @abstractmethod
-    def judge(self, query: str, answer: str, contexts: List[str]) -> JudgeOutput:
+    def judge(self, query: str, answer: List[str], contexts: List[str]) -> JudgeOutput:
         raise NotImplementedError

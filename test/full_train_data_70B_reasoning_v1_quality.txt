@@ -1,0 +1,4 @@
+Label: supportive, Recall: 0.8658, Precision: 0.8738, F1: 0.8698
+Label: contradictory, Recall: 0.2500, Precision: 0.3250, F1: 0.2826
+Label: irrelevant, Recall: 0.9571, Precision: 0.9488, F1: 0.9529
+Macro F1 Score: 0.7018

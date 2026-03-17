@@ -22,7 +22,10 @@ class ContrastiveLoss(torch.nn.Module):
         batch_scores = torch.exp(torch.matmul(input, input.T) / self.T) # (B, B)
         base_mask = torch.ones_like(batch_scores) \
             - torch.eye(batch_scores.size(0), device=batch_scores.device) # exclude self-similarity
+
         group_mask = (target.unsqueeze(1) == target.unsqueeze(0))   # S/C/I group mask
+        valid_positive_mask = (target != 2).unsqueeze(1)
+        group_mask = group_mask & valid_positive_mask   # Only consider positives excluding irrelevant samples
         batch_mask = base_mask * group_mask.float()
 
         denom = torch.sum(batch_scores * base_mask, dim=1, keepdim=True)    # (B, 1)

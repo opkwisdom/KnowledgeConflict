@@ -29,9 +29,10 @@ class CAFormerLightningModule(LightningModule):
         self.prepare_modules()
 
         # Metrics
-        self.acc = Accuracy(task="multiclass", num_classes=3)
-        self.f1 = F1Score(task="multiclass", num_classes=3, average=None)
-        self.conf_mat = ConfusionMatrix(task="multiclass", num_classes=3)
+        self.train_acc = Accuracy(task="multiclass", num_classes=3)
+        self.val_acc = Accuracy(task="multiclass", num_classes=3)
+        self.val_f1 = F1Score(task="multiclass", num_classes=3, average=None)
+        self.val_conf_mat = ConfusionMatrix(task="multiclass", num_classes=3)
         self.val_results = []
 
     def prepare_modules(self):
@@ -39,6 +40,14 @@ class CAFormerLightningModule(LightningModule):
             param.requires_grad = False
         for param in self.caformer_clf.parameters():
             param.requires_grad = True
+        # Freeze the pretrained modules or not
+        if self.cfg.freeze_pretrained:
+            for name, param in self.caformer_clf.ca_former.named_parameters():
+                if "crossattention" not in name and "linear_proj" not in name:
+                    param.requires_grad = False
+                    
+        trainable_params = [name for name, p in self.caformer_clf.named_parameters() if p.requires_grad]
+        logger.info(f"🔥 Trainable Parameters: {trainable_params}")
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -68,9 +77,11 @@ class CAFormerLightningModule(LightningModule):
             ctr_loss = self.ctr_loss_fn(pooled_output, labels_tensor)
         loss = ce_loss + self.ctr_loss_weight * ctr_loss
 
-        acc = self.acc(logits, labels_tensor)
+        acc = self.train_acc(logits, labels_tensor)
+        self.log('train_ce_loss', ce_loss, prog_bar=True, sync_dist=True)
+        self.log('train_ctr_loss', ctr_loss, prog_bar=True, sync_dist=True)
         self.log('train_loss', loss, prog_bar=True, sync_dist=True)
-        self.log('train_acc', acc, prog_bar=True, sync_dist=True)
+        self.log('train_acc', self.train_acc, on_step=True, on_epoch=True, prog_bar=True)
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -97,8 +108,8 @@ class CAFormerLightningModule(LightningModule):
         all_preds = self.all_gather(preds).flatten()
         all_targets = self.all_gather(targets).flatten()
 
-        f1_scores = self.f1(all_preds, all_targets)
-        acc_scores = self.acc(all_preds, all_targets)
+        f1_scores = self.val_f1(all_preds, all_targets)
+        acc_scores = self.val_acc(all_preds, all_targets)
         self.log("val_f1_sup", f1_scores[0], prog_bar=True)
         self.log("val_f1_ctd", f1_scores[1], prog_bar=True)
         self.log("val_f1_irr", f1_scores[2], prog_bar=True)
@@ -127,12 +138,13 @@ class CAFormerLightningModule(LightningModule):
             wandb_logger.experiment.log({"val_cm": conf_mat_plot, "epoch": self.current_epoch})
 
         self.val_results.clear()
-        self.acc.reset()
-        self.f1.reset()
-        self.conf_mat.reset()
+        self.val_acc.reset()
+        self.val_f1.reset()
+        self.val_conf_mat.reset()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.caformer_clf.parameters(), lr=self.learning_rate)
+        trainable_params = filter(lambda p: p.requires_grad, self.caformer_clf.parameters())
+        optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate)
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = int(self.cfg.warmup_ratio * total_steps)
 

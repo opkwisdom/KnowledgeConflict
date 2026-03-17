@@ -23,29 +23,33 @@ class QAExample:
     question: str
     answers: List[str]
     num_answer: int
+    name: str
     parametric_answer: Optional[str] = None
+    ans_type: Optional[str] = None
     ctxs: List[CtxExample] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "QAExample":
         raw_ctxs = data.pop("ctxs", [])
         ctxs = [CtxExample(**ctx) for ctx in raw_ctxs]
-        return cls(ctxs=ctxs, **data)
+        valid_keys = {f.name for f in fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(ctxs=ctxs, **filtered_data)
 
 
 ### Append ctx relevance information to QAExample
 @dataclass
 class CtxsRelevance:
-    positive: List[int] = field(default_factory=list)
-    negative: List[int] = field(default_factory=list)
+    supportive: List[int] = field(default_factory=list)
+    contradictory: List[int] = field(default_factory=list)
     irrelevant: List[int] = field(default_factory=list)
 
     @property
     def mapping(self) -> Dict[int, str]:
         mapping = {}
         for label, idxs in [
-            ("positive", self.positive),
-            ("negative", self.negative),
+            ("supportive", self.supportive),
+            ("contradictory", self.contradictory),
             ("irrelevant", self.irrelevant),
         ]:
             for idx in idxs:
@@ -72,7 +76,7 @@ class RelevanceQAExample(QAExample):
                 is_mapping = True
         
         if is_mapping:
-            relevance_data = {"positive": [], "negative": [], "irrelevant": []}
+            relevance_data = {"supportive": [], "contradictory": [], "irrelevant": []}
             for idx, label in raw_relevance.items():
                 relevance_data[label].append(int(idx))
             relevance_obj = CtxsRelevance(**relevance_data)

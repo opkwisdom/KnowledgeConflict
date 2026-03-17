@@ -1,11 +1,11 @@
 data:
   name: nq
-  data_path: data/train/train_data.json
+  data_path: data/train/timeqa.json
   max_seq_length: 1024
   use_single_context: True
 
   batch_size: 4
-  num_workers: 16
+  num_workers: 0
   topk_per_query: 10
   test_size: 0.1
   seed: 42
@@ -32,9 +32,11 @@ caformer:
 train:
   learning_rate: 2e-5
   warmup_ratio: 0.01
-  max_epochs: 10
+  max_epochs: 3   # Test
   temperature:
-  ctr_loss_weight: 1.0
+  ctr_loss_weight: 0.0
+
+  freeze_pretrained: True
 
 seed: 42
 debug_mode: False

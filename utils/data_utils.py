@@ -19,6 +19,7 @@ class QAExample:
     question: str
     answers: List[str]
     num_answer: int
+    name: str
     ctxs: List[CtxExample] = field(default_factory=list)
 
     @classmethod
