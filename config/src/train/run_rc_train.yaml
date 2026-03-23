@@ -1,0 +1,52 @@
+data:
+  name: wiki
+  data_path: data/collection/psgs_w100.tsv
+  max_seq_length: 256
+
+  batch_size: 8
+  
+  num_workers: 8
+  test_size: 0.0005
+  seed: 42
+
+model:
+  model_name: meta-llama/Meta-Llama-3-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+  hidden_extraction_layers:
+    - 20
+
+caformer:
+  model_name_or_path: roberta-base
+  query_length: 32      # BLIP-2 default setting
+  llm_width:    # Post initialized
+
+  pooling_strategy: max
+  dropout: 0.1
+
+  use_linear_proj: True   # To embed as soft-prompt
+  ckpt_dir: /workspaces/kvzip_nlplab/checkpoint/stage1_ctr_train/multi_LR=0.0001_M-W=0.1_freeze=True/multi-epoch=00-valid
+
+train:
+  learning_rate: 1e-4
+  warmup_ratio: 0.05
+  max_epochs: 1   # Test
+
+  accumulate_grad_batches: 8  # 8x8=64
+
+  freeze_pretrained: True
+
+seed: 42
+debug_mode: False  # Only activate when debugging
+
+self_task_prompt_name: base
+generate_prompt_name: base
+base_prompt_name: pure-llm-brief-2
+
+output_dir: /workspaces/kvzip_nlplab/checkpoint
+project_name: caformer
+exp_type: multi

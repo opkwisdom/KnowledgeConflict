@@ -534,7 +534,7 @@ class RobertaEncoder(nn.Module):
                     (
                         encoder_hidden_states[:, i, :, :]
                         if encoder_hidden_states is not None and len(encoder_hidden_states.size()) == 4
-                        else encoder_hidden_states
+                        else encoder_hidden_states      # use layer-wise encoder hidden states or simply use the last one
                     ),
                     encoder_attention_mask,
                     past_key_value,
@@ -549,7 +549,7 @@ class RobertaEncoder(nn.Module):
                     (
                         encoder_hidden_states[:, i, :, :]
                         if encoder_hidden_states is not None and len(encoder_hidden_states.size()) == 4
-                        else encoder_hidden_states
+                        else encoder_hidden_states      # use layer-wise encoder hidden states or simply use the last one
                     ),
                     encoder_attention_mask,
                     past_key_value,

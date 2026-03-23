@@ -143,6 +143,18 @@ def load_relevance_dataset(data_path: str) -> List[RelevanceQAExample]:
     print(f"Successfully loaded {len(relevance_examples)} Relevance QA examples.")
     return relevance_examples
 
+def load_collection(data_path: str) -> List[Dict[str, str]]:
+    collection = []
+    with open(data_path, 'r') as f:
+        for i, line in tqdm(enumerate(f), desc="Loading collection", unit=" lines"):
+            if i == 0: continue  # Skip header
+            try:
+                id, text, title = line.strip().split("\t")
+                sample = {"id": id, "text": text, "title": title}
+                collection.append(sample)
+            except ValueError:
+                print(f"Skipping malformed line {i}: {line.strip()}")
+    return collection
 
 if __name__ == "__main__":
     # Example usage

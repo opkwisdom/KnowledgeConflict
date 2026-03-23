@@ -8,7 +8,7 @@ from omegaconf import DictConfig
 from torchmetrics import ConfusionMatrix, F1Score, Accuracy
 from transformers import get_linear_schedule_with_warmup
 
-from models import DISCA, CAFormerClassifier, ContrastiveLoss
+from models import DISCA, CAFormerClassifier, SCIContrastiveLoss
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class CAFormerLightningModule(LightningModule):
         self.learning_rate = cfg.learning_rate
 
         self.ce_loss_fn = nn.CrossEntropyLoss()
-        self.ctr_loss_fn = ContrastiveLoss(T=getattr(cfg, "temperature", None) or 1.0)
+        self.ctr_loss_fn = SCIContrastiveLoss(T=getattr(cfg, "temperature", None) or 1.0)
         self.ctr_loss_weight = getattr(cfg, "ctr_loss_weight", 1.0)
         self.prepare_modules()
 

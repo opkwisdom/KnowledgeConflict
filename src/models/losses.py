@@ -1,7 +1,8 @@
 import torch
+import einops
 import torch.nn.functional as F
 
-class ContrastiveLoss(torch.nn.Module):
+class SCIContrastiveLoss(torch.nn.Module):
     """
     Custom SupCon loss for S/C/I labeling dataset.
     """
@@ -35,3 +36,59 @@ class ContrastiveLoss(torch.nn.Module):
         loss = -torch.sum(log_prob * batch_mask, dim=1) / (num_positives + 1e-9)   # (B,)
         loss = loss.mean()
         return loss
+    
+
+
+class MultiQueryContrastiveLoss(torch.nn.Module):
+    def __init__(self, T: float = 1.0):
+        super().__init__()
+        self.T = T
+    
+    def forward(self, input: torch.FloatTensor, target: torch.FloatTensor):
+        """
+        Args:
+            input: Tensor of shape (B, K, D)
+            target: Tensor of shape (B, D)
+        Returns:
+            max_loss: Scalar tensor representing the max contrastive loss across K queries
+            mean_loss: Scalar tensor representing the mean contrastive loss across K queries
+        """
+        B, K, D = input.shape
+        # L2 normalization
+        input = F.normalize(input, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        # sim_matrix: (B, B, K)
+        sim_matrix = einops.einsum(input, target, "b1 k d, b2 d -> b1 b2 k") / self.T
+        max_logits = sim_matrix.max(dim=-1).values  # (B, B)
+        mean_logits = sim_matrix.mean(dim=-1)       # (B, B)
+
+        labels = torch.arange(B, device=input.device)
+        max_loss = F.cross_entropy(max_logits, labels)
+        mean_loss = F.cross_entropy(mean_logits, labels)
+
+        preds = max_logits.argmax(dim=1)
+        acc = (preds == labels).float().mean().item()
+        
+        return max_loss, mean_loss, acc
+
+
+class CosSimRegLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, input: torch.FloatTensor):
+        """
+        Args:
+            input: Tensor of shape (B, K, D)
+        Returns:
+            reg_loss: Scalar tensor representing the cosine similarity regularization loss
+        """
+        B, K, D = input.shape
+        input = F.normalize(input, p=2, dim=-1)
+
+        sim_matrix = torch.bmm(input, input.transpose(1, 2))    # (B, K, K)
+        mask = torch.eye(K, dtype=torch.bool, device=input.device).unsqueeze(0)  # (1, K, K)
+        sim_matrix = sim_matrix.masked_fill(mask, 0.0)
+        mean_sim = sim_matrix.sum() / (B * K * (K - 1))
+        return mean_sim

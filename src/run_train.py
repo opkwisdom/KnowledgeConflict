@@ -32,7 +32,8 @@ def main():
     lightning_module = CAFormerLightningModule(config.train, disca, caformer_clf)
 
     # Callbacks
-    output_dir = os.path.join(config.output_dir, f"{config.exp_type}_LR={config.train.learning_rate}_CTR-W={config.train.ctr_loss_weight}_freeze={config.train.freeze_pretrained}")
+    output_dir = os.path.join(config.output_dir,
+                              f"{config.exp_type}_LR={config.train.learning_rate}_CTR-W={config.train.ctr_loss_weight}_freeze={config.train.freeze_pretrained}")
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath=output_dir,

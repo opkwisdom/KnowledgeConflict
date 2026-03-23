@@ -11,7 +11,7 @@ data:
   seed: 42
 
 model:
-  model_name: meta-llama/Llama-3.1-8B-Instruct
+  model_name: meta-llama/Llama-3-8B-Instruct
   gen_kwargs:
     do_sample: False
     temperature: 1.0
