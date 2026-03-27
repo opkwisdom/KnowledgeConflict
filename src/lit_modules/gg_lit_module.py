@@ -1,0 +1,361 @@
+import torch.nn as nn
+import torch
+import logging
+import wandb
+import einops
+import torch.nn.functional as F
+from typing import Union
+from pytorch_lightning import LightningModule
+from omegaconf import DictConfig
+from transformers import get_linear_schedule_with_warmup, AutoTokenizer
+
+from utils import compute_metrics, parse_reference_answer
+from models import load_model, CAFormerGGClassifier
+
+logger = logging.getLogger(__name__)
+
+
+class GGLightningModule(LightningModule):
+    def __init__(self, cfg: DictConfig, llm: nn.Module, llm_tokenizer: AutoTokenizer, caformer_clf: CAFormerGGClassifier):
+        super().__init__()
+        self.save_hyperparameters(ignore=["llm", "caformer_clf"])
+
+        self.llm = llm
+        self.llm_tokenizer = llm_tokenizer
+        self.caformer_clf = caformer_clf
+        self.cfg = cfg
+        self.learning_rate = cfg.learning_rate
+        self.n_iter = getattr(cfg, "n_iter", 1)
+        self.oracle_mode = getattr(cfg, "oracle_mode", "whole")
+        self.lambda_g = getattr(cfg, "lambda_g", 1.0) 
+
+        self.scaling_factor = getattr(cfg, "scaling_factor", 1.0)
+        self.guide_loss_fn = nn.L1Loss()
+        self.gen_loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+
+        self.val_logits = []
+        self.val_labels = []
+        self.prepare_modules()
+
+    def prepare_modules(self):
+        # Freeze the pretrained LLM
+        for param in self.llm.parameters():
+            param.requires_grad = False
+        
+        for param in self.caformer_clf.parameters():
+            param.requires_grad = True
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.llm.eval()  # Ensure the base model is always in eval mode
+
+    def forward(self, batch):
+        """
+        Forward pass to generate LLM hidden states for both documents and CA-Former input.
+        Returns:
+            doc_repr: Tensor of shape (B*K, D_llm) - LLM representation of the document (using <EOS> token)
+            llm_repr: Tensor of shape (B*K, L, S, D_llm) - LLM hidden states for CA-Former input
+        """
+        # Generate LLM hidden states of documents, last layer only, <EOS> token
+        # Since we use right-padding, we should track the position of <EOS> token
+        with torch.no_grad():
+            doc_outputs = self.llm(
+                input_ids=batch["doc_input_ids"],
+                attention_mask=batch["doc_attention_mask"],
+                output_hidden_states=True,
+            )
+            last_hidden_state = doc_outputs.hidden_states[-1]  # (B*K, L, D_llm)
+            last_token_indices = batch["doc_attention_mask"].sum(dim=-1) - 1   # (B*K,)
+            D_llm = last_hidden_state.shape[-1]
+            gather_indices = last_token_indices.view(-1, 1, 1).expand(-1, 1, D_llm)
+            doc_repr = torch.gather(last_hidden_state, dim=1, index=gather_indices).squeeze(1)  # (B*K, D_llm)
+
+        # Generate LLM hidden states for CA-Former input
+        with torch.no_grad():
+            llm_outputs = self.llm(
+                input_ids=batch["source_input_ids"],
+                attention_mask=batch["source_attention_mask"],
+                output_hidden_states=True,
+            )
+            llm_repr = torch.stack(llm_outputs.hidden_states).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
+        return doc_repr, llm_repr
+    
+    def compute_oracle_loss_gradients(self, batch):
+        """
+        Compute the gradients of the oracle loss.
+        Basically, we return the whole gradient matrix.
+        Returns:
+            loss_oracle: scalar tensor
+            loss_gradients: Tensor of shape (B, k * max_seq_length + max_ans_length, D_llm)
+        """
+        inputs_embeds = self.llm.get_input_embeddings()(batch["target_input_ids"])
+        inputs_embeds = inputs_embeds.detach().requires_grad_(True)
+
+        llm_outputs = self.llm(
+            inputs_embeds=inputs_embeds,
+            attention_mask=batch["target_attention_mask"],
+            labels=batch["target_labels"]
+        )
+        loss_oracle = llm_outputs.loss
+        del llm_outputs
+        
+        loss_gradients = torch.autograd.grad(
+            outputs=loss_oracle,    # Starting point
+            inputs=inputs_embeds,   # End point
+            retain_graph=False,
+            create_graph=False      # We don't need higher-order gradients here
+        )[0]    # (B, k * max_seq_length + max_ans_length, D_llm)
+        return loss_oracle.detach(), loss_gradients
+
+    def compute_oracle_scores(self, loss_gradients, doc_repr, doclen_list):
+        """
+        Compute the target scores for CA-Former based on the gradients of the oracle loss.
+        Args:
+            loss_gradients: Tensor of shape (B, k * max_seq_length + max_ans_length, D_llm)
+            doc_repr: Tensor of shape (B*k, D_llm)
+            doclen_list: Tensor of shape (B, k)
+        Returns:
+            scores_oracle: Tensor of shape (B*k, 1)
+        """
+        B = loss_gradients.shape[0]
+        K = doc_repr.shape[0] // loss_gradients.shape[0]
+        D = doc_repr.shape[-1]
+        # Expand loss_gradients to match the shape of doc_repr
+        loss_gradients_expanded = loss_gradients.unsqueeze(1).expand(-1, K, -1, -1)
+        loss_gradients_expanded = loss_gradients_expanded.reshape(B*K, -1, D)
+        neg_loss_gradients_expanded = -1 * loss_gradients_expanded
+
+        # Most naive way in parallel, faster
+        if self.oracle_mode == "whole":
+            scores_oracle = einops.einsum(doc_repr, neg_loss_gradients_expanded,
+                                      "b d, b l d -> b l").mean(dim=-1)
+        # More fine-grained way using sequential processing, slower
+        elif self.oracle_mode == "marginal":
+            scores_oracle = torch.zeros(B*K, device=loss_gradients.device)
+            for i in range(B):
+                start_pos = 0
+                for j in range(K):
+                    flat_idx = i*K + j
+                    end_pos = start_pos + doclen_list[i, j]
+                    marginal_gradients = neg_loss_gradients_expanded[flat_idx, start_pos:end_pos]   # (doc_len, D_llm)
+                    each_doc_repr = doc_repr[flat_idx]     # (D_llm,)
+                    each_scores_oracle = einops.einsum(each_doc_repr, marginal_gradients,
+                                                       "d, l d -> l").mean(dim=-1)
+                    scores_oracle[flat_idx] = each_scores_oracle
+                    start_pos = end_pos
+        else:
+            raise ValueError(f"Unknown oracle mode: {self.oracle_mode}")
+        # scaling up
+        scores_oracle = scores_oracle * self.scaling_factor
+        return scores_oracle
+
+    def compute_interleaving_loss(self, target_input_ids, target_attention_mask, query_hidden_states, doclen_list, a_len_list, return_logits=False):
+        """
+        Compute the generation loss conditioned on the interleaving document inputs.
+        interleaving document inputs: D_1 + Q_{CA}^{(1)} + ... + D_K + Q_{CA}^{(K)} + Q + A (Teacher-forcing)
+        Args:
+            target_input_ids: Tensor of shape (B, L_total)
+            target_attention_mask: Tensor of shape (B, L_total)
+            query_hidden_states: Tensor of shape (B*k, S, D_llm)
+            doclen_list: Tensor of shape (B, k)
+            a_len_list: Tensor of shape (B,)
+        Returns:
+            gen_loss: scalar tensor
+            (Optional) batch_logits: length of B List of Tensor of shape (A, V)
+            (Optional) batch_labels: length of B List of Tensor of shape (A,)
+        """
+        full_repr = self.llm.get_input_embeddings()(target_input_ids)   # (B, L_total, D_llm)
+        B, K = doclen_list.shape
+        _, _, D = full_repr.shape
+        input_embeds = []
+        target_ids_list = []
+        for i in range(B):
+            start_pos = 0
+            sample_input_embeds = []
+            for j in range(K):
+                flat_idx = i*K + j
+                doclen = doclen_list[i, j]
+                end_pos = start_pos + doclen
+                each_doc_repr = full_repr[i, start_pos:end_pos]    # (doc_len, D_llm)
+                each_doc_repr = torch.cat([each_doc_repr, query_hidden_states[flat_idx]], dim=0)    # (doc_len + S, D_llm)
+                sample_input_embeds.append(each_doc_repr)
+                start_pos = end_pos
+            # Append the Q + A part
+            effective_len = target_attention_mask[i].sum().item()
+            sample_input_embeds.append(full_repr[i, start_pos:effective_len])
+            sample_input_embeds = torch.cat(sample_input_embeds, dim=0)
+            target_ids = target_input_ids[i, effective_len - a_len_list[i]:effective_len]   # (a_len,)
+            target_ids_list.append(target_ids)
+            input_embeds.append(sample_input_embeds)
+        
+        # Pad manually
+        padded_inputs_embeds = []
+        padded_inputs_attention_mask = []
+        padded_target_labels = []
+        effective_len_list = []
+        for input_embed, a_len, target_ids in zip(input_embeds, a_len_list, target_ids_list):
+            input_len = input_embed.shape[0]
+            effective_len_list.append(input_len)
+            
+            pad_len = max(0, self.cfg.max_interleaving_len - input_len)
+            padded_input_embed = torch.cat([input_embed, torch.zeros(pad_len, D, device=input_embed.device, dtype=input_embed.dtype)], dim=0)
+            padded_inputs_embeds.append(padded_input_embed)
+
+            padded_input_attention_mask = torch.ones(input_len + pad_len, device=input_embed.device, dtype=torch.long)
+            if pad_len > 0:
+                padded_input_attention_mask[-pad_len:] = 0
+            padded_inputs_attention_mask.append(padded_input_attention_mask)
+
+            padded_target_label = torch.full((padded_input_attention_mask.shape[0],), -100, device=input_embed.device, dtype=torch.long)
+            padded_target_label[input_len - a_len:input_len] = target_ids
+            padded_target_labels.append(padded_target_label)
+        
+        padded_inputs_embeds = torch.stack(padded_inputs_embeds)   # (B, L_total + K*S, D_llm)
+        padded_inputs_attention_mask = torch.stack(padded_inputs_attention_mask)   # (B, L_total + K*S)
+        padded_target_labels = torch.stack(padded_target_labels)   # (B, L_total + K*S)
+
+        # Generate logits and compute loss
+        llm_outputs = self.llm(
+            inputs_embeds=padded_inputs_embeds,
+            attention_mask=padded_inputs_attention_mask,
+            labels=padded_target_labels
+        )
+        gen_loss = llm_outputs.loss
+
+        outputs = (gen_loss,)
+        if return_logits:
+            logits = llm_outputs.logits.detach().cpu()
+            target_labels = padded_target_labels.detach().cpu()
+            
+            batch_logits = []
+            batch_labels = []
+            for i, (effective_len, a_len) in enumerate(zip(effective_len_list, a_len_list)):
+                start_pos = effective_len - a_len
+                end_pos = effective_len
+                # Consider NTP
+                sample_logits = logits[i, start_pos-1:end_pos-1, :]
+                sample_labels = target_labels[i, start_pos:end_pos]
+                batch_logits.append(sample_logits)
+                batch_labels.append(sample_labels)
+            # Add as result
+            outputs += (batch_logits, batch_labels)
+        return outputs
+
+    def training_step(self, batch, batch_idx):
+        doc_repr, llm_repr = self.forward(batch)
+        # allow gradients to flow back to doc_repr for oracle loss calculation
+        doc_repr = doc_repr.detach()
+        scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"])
+
+        # Compute the gradient of the oracle loss and target score
+        loss_oracle, loss_gradients = self.compute_oracle_loss_gradients(batch)
+        scores_oracle = self.compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])    # (B*K, 1)
+        scores_oracle = scores_oracle.detach()
+
+        # Guide loss
+        guide_loss = self.guide_loss_fn(scores_hat, scores_oracle)
+        # Generation loss
+        gen_loss = self.compute_interleaving_loss(
+            batch["target_input_ids"],
+            batch["target_attention_mask"],
+            query_hidden_states,
+            batch["doclen_list"],
+            batch["a_len"]
+        )[0]
+        loss = guide_loss + self.lambda_g * gen_loss
+        
+        self.log("train/oracle_loss", loss_oracle, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/guide_loss", guide_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/gen_loss", gen_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/loss", loss, on_step=True, on_epoch=True, sync_dist=True)
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        doc_repr, llm_repr = self.forward(batch)
+        # allow gradients to flow back to doc_repr for oracle loss calculation
+        doc_repr = doc_repr.detach()
+        scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"])
+
+        # Compute the gradient of the oracle loss and target score
+        # Temporarily enable gradient tracking
+        with torch.enable_grad():
+            loss_oracle, loss_gradients = self.compute_oracle_loss_gradients(batch)
+        scores_oracle = self.compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])    # (B*K, 1)
+        scores_oracle = scores_oracle.detach()
+
+        # Guide loss
+        guide_loss = self.guide_loss_fn(scores_hat, scores_oracle)
+        # Generation loss
+        gen_loss, batch_logits, batch_labels = self.compute_interleaving_loss(
+            batch["target_input_ids"],
+            batch["target_attention_mask"],
+            query_hidden_states,
+            batch["doclen_list"],
+            batch["a_len"],
+            return_logits=True
+        )
+        loss = guide_loss + self.lambda_g * gen_loss
+
+        self.val_logits.extend(batch_logits)
+        self.val_labels.extend(batch_labels)
+
+        self.log("valid/oracle_loss", loss_oracle, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("valid/guide_loss", guide_loss, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("valid/gen_loss", gen_loss, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("valid/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+
+
+    def on_validation_epoch_end(self):
+        total_em = 0.0
+        total_f1 = 0.0
+        total_count = 0
+        
+        # Compute EM, F1 based on val_logits and val_labels
+        for logits, labels in zip(self.val_logits, self.val_labels):
+            pred_ids = logits.argmax(dim=-1)
+            pred = self.llm_tokenizer.decode(pred_ids)
+            answer = self.llm_tokenizer.decode(labels)
+            gold_answers = parse_reference_answer(answer)
+            metrics = compute_metrics(pred, gold_answers)
+            
+            total_em += float(metrics.soft_em)
+            total_f1 += float(metrics.f1)
+            total_count += 1
+
+        avg_em = total_em / total_count if total_count > 0 else 0.0
+        avg_f1 = total_f1 / total_count if total_count > 0 else 0.0
+        
+        self.log("valid/EM", avg_em, sync_dist=True)
+        self.log("valid/F1", avg_f1, sync_dist=True)
+
+        self.val_logits.clear()
+        self.val_labels.clear()
+        
+    def on_save_checkpoint(self, checkpoint):
+        # save only CAFormer classifier weights
+        state_dict = checkpoint["state_dict"]
+        caformer_clf_state_dict = {
+            k: v for k, v in state_dict.items() if "caformer_clf" in k
+        }
+        checkpoint["state_dict"] = caformer_clf_state_dict
+
+    def configure_optimizers(self):
+        trainable_params = filter(lambda p: p.requires_grad, self.caformer_clf.parameters())
+        optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate)
+        total_steps = self.trainer.estimated_stepping_batches
+        warmup_steps = int(self.cfg.warmup_ratio * total_steps)
+
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }

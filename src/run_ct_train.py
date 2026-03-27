@@ -43,11 +43,12 @@ def main():
     checkpoint_callback = ModelCheckpoint(
         monitor='valid/ctr_loss',
         dirpath=output_dir,
-        filename=f'{config.exp_type}-{{epoch:02d}}-{{valid/ctr_loss:.4f}}',
+        filename=f'{config.exp_type}-{{epoch:02d}}-val_ctr_loss={{valid/ctr_loss:.4f}}',
         save_top_k=3,
         mode='min',
         every_n_train_steps=5000,
-        save_last=True
+        save_last=True,
+        auto_insert_metric_name=False
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
     name = f"{config.exp_type}_LR={config.train.learning_rate}_freeze={config.train.freeze_pretrained}"

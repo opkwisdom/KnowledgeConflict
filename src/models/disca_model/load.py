@@ -49,9 +49,10 @@ def load_model(model_name: str, **kwargs):
         model_id,
         torch_dtype="auto",
         device_map={"": local_rank},
+        attn_implementation="flash_attention_2" # faster
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    tokenizer.padding_side = "left"
+    tokenizer.padding_side = "right"
 
     if "llama" in model_id.lower():
         model.generation_config.pad_token_id = tokenizer.pad_token_id = 128004

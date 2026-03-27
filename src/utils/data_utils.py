@@ -156,6 +156,27 @@ def load_collection(data_path: str) -> List[Dict[str, str]]:
                 print(f"Skipping malformed line {i}: {line.strip()}")
     return collection
 
+def format_reference_answer(answers: List[str]) -> str:
+    clean_answers = [ans.replace('\xa0', ' ').strip() for ans in answers]
+    
+    if len(clean_answers) == 1:
+        return clean_answers[0]
+    elif len(clean_answers) == 2:
+        return f"{clean_answers[0]} and {clean_answers[1]}"
+    else:
+        return ", ".join(clean_answers[:-1]) + f", and {clean_answers[-1]}"
+
+def parse_reference_answer(formatted_answer: str) -> List[str]:
+    if ", and " in formatted_answer:
+        parts = formatted_answer.split(", and ")
+        last_item = parts[-1]
+        other_items = parts[0].split(", ")
+        return other_items + [last_item]
+    elif " and " in formatted_answer:
+        return formatted_answer.split(" and ")
+    else:
+        return [formatted_answer]
+
 if __name__ == "__main__":
     # Example usage
     NQ_DIR = "../../data/nq/retrieved"

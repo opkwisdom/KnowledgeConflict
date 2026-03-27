@@ -2,7 +2,7 @@ import re
 import string
 import regex
 from collections import Counter
-from typing import List
+from typing import List, Union
 from dataclasses import dataclass
 from pydantic import BaseModel
 
@@ -139,8 +139,11 @@ def f1_score(a_pred: str, a_true: List[str]) -> float:
     return 2 * (prec * rec) / (prec + rec)
 
 ### Return all metrics
-def compute_metrics(a_pred: str, a_true: List[str]) -> MetricResult:
+def compute_metrics(a_pred: str, a_true: Union[str, List[str]]) -> MetricResult:
     """Compute all metrics: soft EM, recall, precision, F1."""
+    if isinstance(a_true, str):
+        a_true = [a_true]
+    
     soft_em = has_answer(a_pred, a_true)
     rec = recall(a_pred, a_true)
     prec = precision(a_pred, a_true)

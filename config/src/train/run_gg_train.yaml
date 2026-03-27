@@ -1,12 +1,14 @@
 data:
-  name: wiki
-  data_path: data/collection/psgs_w100_2M_sample.tsv
-  max_seq_length: 256
-
-  batch_size: 8
+  name: odqa
+  data_path: data/train/odqa_train.jsonl
   
+  max_seq_length: 256
+  max_ans_length: 32
+
+  batch_size: 1
   num_workers: 8
-  test_size: 0.0005
+  topk_per_query: 10
+  test_size: 0.05
   seed: 42
 
 model:
@@ -17,8 +19,6 @@ model:
     top_p: 1
     top_k: null
     max_new_tokens: 32
-  hidden_extraction_layers:
-    - 20
 
 caformer:
   model_name_or_path: roberta-base
@@ -29,16 +29,20 @@ caformer:
   dropout: 0.1
 
   use_linear_proj: True   # To embed as soft-prompt
-  ckpt_dir: /workspaces/kvzip_nlplab/checkpoint/stage1_ctr_train/multi_LR=0.0001_M-W=0.1_freeze=True/multi-epoch=00-valid
+  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
 
 train:
-  learning_rate: 1e-4
+  learning_rate: 2e-5
   warmup_ratio: 0.05
-  max_epochs: 1   # Test
+  max_epochs: 2
 
-  accumulate_grad_batches: 8  # 8x8=64
-
+  n_iter: 1   # the number of iterations for Taylor approximation
+  oracle_mode: marginal
+  max_interleaving_len:   # Post initialized
   freeze_pretrained: True
+
+  scaling_factor: 10
+  accumulate_grad_batches: 16
 
 seed: 42
 debug_mode: False  # Only activate when debugging

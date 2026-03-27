@@ -6,10 +6,9 @@ import torch.nn.functional as F
 from typing import Union
 from pytorch_lightning import LightningModule
 from omegaconf import DictConfig
-from torchmetrics import ConfusionMatrix, F1Score, Accuracy
 from transformers import get_linear_schedule_with_warmup, RobertaModel
 
-from models import DISCA, MultiHiddenCAFormer, MultiQueryContrastiveLoss, load_model, CosSimRegLoss
+from models import MultiHiddenCAFormer, MultiQueryContrastiveLoss, load_model, CosSimRegLoss
 
 logger = logging.getLogger(__name__)
 
