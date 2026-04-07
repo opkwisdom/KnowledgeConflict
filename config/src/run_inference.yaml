@@ -1,0 +1,42 @@
+data:
+  name: nq
+  data_path: data/nq/parametric_relevance_tagged/validation.json
+  
+  max_query_length: 32
+  max_seq_length: 256
+  max_length: 3072
+  use_single_context: True
+
+  batch_size: 4
+  seed: 42
+
+model:
+  model_name: meta-llama/Meta-Llama-3-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+
+caformer:
+  model_name_or_path: roberta-base
+  query_length: 32      # BLIP-2 default setting
+  llm_width:    # Post initialized
+
+  pooling_strategy: max
+  dropout: 0.1
+
+  use_linear_proj: True   # To embed as soft-prompt
+  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage3_gradient_guided_train/multi_LR=2e-05_fromST2_BS=1_AGB=16_Q=True/multi-00-004479-valid_loss=3.1132.ckpt
+
+seed: 42
+
+self_task_prompt_name: base
+generate_prompt_name: base
+base_prompt_name: pure-llm-brief-2
+
+output_dir: /workspaces/kvzip_nlplab/DISCA/results
+project_name: caformer
+exp_type: multi
+experiment_name: QO

@@ -23,9 +23,10 @@ class QAExample:
     question: str
     answers: List[str]
     num_answer: int
-    name: str
+    # name: str
     parametric_answer: Optional[str] = None
     ans_type: Optional[str] = None
+    idx: int = None
     ctxs: List[CtxExample] = field(default_factory=list)
 
     @classmethod
@@ -69,22 +70,24 @@ class RelevanceQAExample(QAExample):
         ctxs_obj = [CtxExample(**ctx) for ctx in raw_ctxs]
         
         raw_relevance = data.pop("ctx_relevance", {})
-        is_mapping = False
-        if raw_relevance:
-            first_key = next(iter(raw_relevance.keys()))
-            if isinstance(first_key, (int, str)) and str(first_key).isdigit():
-                is_mapping = True
+        # is_mapping = False
+        # if raw_relevance:
+        #     first_key = next(iter(raw_relevance.keys()))
+        #     if isinstance(first_key, (int, str)) and str(first_key).isdigit():
+        #         is_mapping = True
         
-        if is_mapping:
-            relevance_data = {"supportive": [], "contradictory": [], "irrelevant": []}
-            for idx, label in raw_relevance.items():
-                relevance_data[label].append(int(idx))
-            relevance_obj = CtxsRelevance(**relevance_data)
-        else:
-            relevance_obj = CtxsRelevance(**raw_relevance)
+        # if is_mapping:
+        #     relevance_data = {"supportive": [], "contradictory": [], "irrelevant": []}
+        #     for idx, label in raw_relevance.items():
+        #         relevance_data[label].append(int(idx))
+        #     relevance_obj = CtxsRelevance(**relevance_data)
+        # else:
+        #     relevance_obj = CtxsRelevance(**raw_relevance)
+        relevance_obj = CtxsRelevance(supportive=[], contradictory=[], irrelevant=[])
         
         valid_fields = {f.name for f in fields(cls)}
         init_kwargs = {k: v for k, v in data.items() if k in valid_fields}
+        # init_kwargs.pop("ctx_relevance")
 
         return cls(ctxs=ctxs_obj, ctx_relevance=relevance_obj, **init_kwargs)
 

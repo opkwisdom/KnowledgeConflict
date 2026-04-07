@@ -110,10 +110,9 @@ def run_baseline_inference(
     tokenizer: AutoTokenizer,
     data: List[RelevanceQAExample],
     logger,
-) -> Dict[str, List[InferenceResult]]:
+) -> List[InferenceResult]:
     logger.info("Starting RAG Baseline Inference...")
-    inference_cases = ["rag_result"]
-    results = {infer_case: [] for infer_case in inference_cases}
+    results = []
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     for idx, item in tqdm(enumerate(data), desc="Running RAG Inference", total=len(data)):
@@ -142,45 +141,40 @@ def run_baseline_inference(
             answers=answers,
             metrics=metrics,
         )
-        results[f"rag_result"].append(sample_result)
+        results.append(sample_result)
     return results
 
 def validate_and_save_results(
-    results: Dict[str, List[InferenceResult]],
+    inference_list: Dict[str, List[InferenceResult]],
     output_dir: str,
     logger: logging.Logger,
 ) -> None:
     summary_path = f"{output_dir}/inference_summary.txt"
     all_results_path = f"{output_dir}/inference_results.json"
-    summary = {}
 
-    for k, inference_list in results.items():
-        total = len(inference_list)
-        
-        correct = sum([1 for res in inference_list if res.metrics.soft_em])
-        recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
-        precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
-        f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
+    total = len(inference_list)
+    correct = sum([1 for res in inference_list if res.metrics.soft_em])
+    recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
+    precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
+    f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
 
-        accuracy = correct / total if total > 0 else 0.0
-        logger.info(f"Case {k}: Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
-                    f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
-        summary[k] = {
-            "total": total,
-            "correct": correct,
-            "accuracy": round(accuracy, 4),
-            "recall": round(recall, 4),
-            "precision": round(precision, 4),
-            "f1": round(f1, 4),
-        }
+    accuracy = correct / total if total > 0 else 0.0
+    logger.info(f"Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
+                f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
+    summary = {
+        "total": total,
+        "correct": correct,
+        "accuracy": round(accuracy, 4),
+        "recall": round(recall, 4),
+        "precision": round(precision, 4),
+        "f1": round(f1, 4),
+    }
     
     with open(summary_path, 'w') as f:
         json.dump(summary, f, ensure_ascii=False, indent=4)
     logger.info(f"Saved inference summary to {summary_path}")
     with open(all_results_path, 'w') as f:
-        json_results = {
-            k: [asdict(res) for res in v] for k, v in results.items()
-        }
+        json_results = [asdict(res) for res in inference_list]
         json.dump(json_results, f, ensure_ascii=False, indent=4)
 
 
@@ -192,7 +186,8 @@ def main():
     output_dir = os.path.join(config.output_dir, config.data.name)  # Use data name from config
     config.output_dir = os.path.join(output_dir, experiment_name, cur_time)
     
-    logger = setup_logger(f"rag_inference_{cur_time}", config.output_dir)
+    setup_logger(f"rag_inference_{cur_time}", config.output_dir)
+    logger = logging.getLogger(__name__)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(config))
 
@@ -204,9 +199,10 @@ def main():
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
     # Initialize model
-    model = AutoModelForCausalLM.from_pretrained(config.model.model_name)
+    model = AutoModelForCausalLM.from_pretrained(config.model.model_name, torch_dtype="bfloat16", attn_implementation="flash_attention_2")
     tokenizer = AutoTokenizer.from_pretrained(config.model.model_name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
+    tokenizer.padding_side = "left"
     model.to('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Model {config.model.model_name} initialized.")
 

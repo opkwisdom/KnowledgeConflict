@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from typing import Union
 from pytorch_lightning import LightningModule
 from omegaconf import DictConfig
-from transformers import get_linear_schedule_with_warmup, AutoTokenizer
+from transformers import get_linear_schedule_with_warmup, AutoTokenizer, AutoModelForCausalLM
 
 from utils import compute_metrics, parse_reference_answer
 from models import load_model, CAFormerGGClassifier
@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class GGLightningModule(LightningModule):
-    def __init__(self, cfg: DictConfig, llm: nn.Module, llm_tokenizer: AutoTokenizer, caformer_clf: CAFormerGGClassifier):
+    def __init__(self, cfg: DictConfig,
+                 llm: AutoModelForCausalLM, llm_tokenizer: AutoTokenizer, caformer_clf: CAFormerGGClassifier):
         super().__init__()
         self.save_hyperparameters(ignore=["llm", "caformer_clf"])
 
@@ -44,6 +45,11 @@ class GGLightningModule(LightningModule):
         
         for param in self.caformer_clf.parameters():
             param.requires_grad = True
+            
+        # Gradient checkpointing configuration
+        # This is useful for fine-tuning adapter weights while keeping the model weights fixed.
+        self.llm.enable_input_require_grads()
+        self.llm.gradient_checkpointing_enable()
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -77,7 +83,7 @@ class GGLightningModule(LightningModule):
                 attention_mask=batch["source_attention_mask"],
                 output_hidden_states=True,
             )
-            llm_repr = torch.stack(llm_outputs.hidden_states).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
+            llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
         return doc_repr, llm_repr
     
     def compute_oracle_loss_gradients(self, batch):
@@ -193,11 +199,15 @@ class GGLightningModule(LightningModule):
         padded_inputs_attention_mask = []
         padded_target_labels = []
         effective_len_list = []
+
+        max_len_in_batch = max([embed.shape[0] for embed in input_embeds])
+        safe_max_len = min(max_len_in_batch, self.cfg.max_interleaving_len)
+
         for input_embed, a_len, target_ids in zip(input_embeds, a_len_list, target_ids_list):
             input_len = input_embed.shape[0]
             effective_len_list.append(input_len)
             
-            pad_len = max(0, self.cfg.max_interleaving_len - input_len)
+            pad_len = max(0, safe_max_len - input_len)
             padded_input_embed = torch.cat([input_embed, torch.zeros(pad_len, D, device=input_embed.device, dtype=input_embed.dtype)], dim=0)
             padded_inputs_embeds.append(padded_input_embed)
 
@@ -235,8 +245,9 @@ class GGLightningModule(LightningModule):
                 # Consider NTP
                 sample_logits = logits[i, start_pos-1:end_pos-1, :]
                 sample_labels = target_labels[i, start_pos:end_pos]
-                batch_logits.append(sample_logits)
-                batch_labels.append(sample_labels)
+                sample_preds = sample_logits.argmax(dim=-1)
+                batch_logits.append(sample_preds.detach().cpu())
+                batch_labels.append(sample_labels.detach().cpu())
             # Add as result
             outputs += (batch_logits, batch_labels)
         return outputs
@@ -245,12 +256,15 @@ class GGLightningModule(LightningModule):
         doc_repr, llm_repr = self.forward(batch)
         # allow gradients to flow back to doc_repr for oracle loss calculation
         doc_repr = doc_repr.detach()
-        scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"])
+        scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"],
+                                                            batch["question_ids"], batch["question_attention_mask"])
+        del llm_repr
 
         # Compute the gradient of the oracle loss and target score
         loss_oracle, loss_gradients = self.compute_oracle_loss_gradients(batch)
         scores_oracle = self.compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])    # (B*K, 1)
         scores_oracle = scores_oracle.detach()
+        del loss_gradients, doc_repr
 
         # Guide loss
         guide_loss = self.guide_loss_fn(scores_hat, scores_oracle)
@@ -275,7 +289,8 @@ class GGLightningModule(LightningModule):
         doc_repr, llm_repr = self.forward(batch)
         # allow gradients to flow back to doc_repr for oracle loss calculation
         doc_repr = doc_repr.detach()
-        scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"])
+        scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"],
+                                                            batch["question_ids"], batch["question_attention_mask"])
 
         # Compute the gradient of the oracle loss and target score
         # Temporarily enable gradient tracking
@@ -313,9 +328,8 @@ class GGLightningModule(LightningModule):
         
         # Compute EM, F1 based on val_logits and val_labels
         for logits, labels in zip(self.val_logits, self.val_labels):
-            pred_ids = logits.argmax(dim=-1)
-            pred = self.llm_tokenizer.decode(pred_ids)
-            answer = self.llm_tokenizer.decode(labels)
+            pred = self.llm_tokenizer.decode(logits, skip_special_tokens=True)
+            answer = self.llm_tokenizer.decode(labels, skip_special_tokens=True)
             gold_answers = parse_reference_answer(answer)
             metrics = compute_metrics(pred, gold_answers)
             

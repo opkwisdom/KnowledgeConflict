@@ -6,5 +6,8 @@ export PYTHONPATH=$PWD/src:$PYTHONPATH
 
 CONFIG_PATH=$1
 
+# Base setting
 python3 src/run_gg_train.py \
-    --config $CONFIG_PATH
+    --config config/src/train/run_gg_train.yaml
+
+# Convert to oracle mode

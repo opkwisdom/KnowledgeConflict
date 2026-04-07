@@ -6,7 +6,7 @@ data:
   max_ans_length: 32
 
   batch_size: 1
-  num_workers: 8
+  num_workers: 0
   topk_per_query: 10
   test_size: 0.05
   seed: 42
@@ -43,6 +43,7 @@ train:
 
   scaling_factor: 10
   accumulate_grad_batches: 16
+  append_question: True
 
 seed: 42
 debug_mode: False  # Only activate when debugging

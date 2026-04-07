@@ -101,11 +101,14 @@ class MultiHiddenCAFormer(nn.Module):
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         return query_embeds
     
-    def forward(self, llm_hidden_states: torch.FloatTensor, attention_mask: torch.LongTensor):
+    def forward(self, llm_hidden_states: torch.FloatTensor, attention_mask: torch.LongTensor,
+                question_input_ids: torch.LongTensor = None, question_attention_mask: torch.LongTensor = None):
         """
         Args:
             llm_hidden_states: Tensor of shape (B, L_select, S, D_llm)
             attention_mask: Tensor of shape (B, S)
+            question_input_ids: Tensor of shape (B, Q_len), optional
+            question_attention_mask: Tensor of shape (B, Q_len), optional
         Returns:
             caformer_output: Tuple containing:
                 sequence_output: Tensor of shape (B, K, D_probe)
@@ -113,16 +116,32 @@ class MultiHiddenCAFormer(nn.Module):
         """
         llm_hidden_states = llm_hidden_states[:, -self.roberta_config.num_hidden_layers:]     # multi layers
         query_embeds = self.gen_query_embeds(llm_hidden_states)
+        query_attention_mask = torch.ones(
+            query_embeds.size(0), self.query_length,
+            dtype=torch.long, device=query_embeds.device
+        )
+        
+        if question_input_ids is not None and question_attention_mask is not None:
+            question_repr = self.model.get_input_embeddings()(question_input_ids)
+            K = query_embeds.size(0) // question_repr.size(0)
+            question_repr_expanded = question_repr.repeat_interleave(K, dim=0)
+            question_mask_expanded = question_attention_mask.repeat_interleave(K, dim=0)
+
+            query_embeds = torch.cat([query_embeds, question_repr_expanded], dim=1)
+            query_attention_mask = torch.cat([query_attention_mask, question_mask_expanded], dim=1)
 
         llm_hidden_states = llm_hidden_states.to(self.model.device)
         attention_mask = attention_mask.to(self.model.device)
 
         outputs = self.model(
             query_embeds=query_embeds,
+            attention_mask=query_attention_mask,
             encoder_hidden_states=llm_hidden_states,
             encoder_attention_mask=attention_mask,
         )
         sequence_output = outputs.last_hidden_state # (B, K, D_probe)
+        if question_input_ids is not None:
+            sequence_output = sequence_output[:, :self.query_length, :]
 
         caformer_output = (sequence_output,)
         if self.linear_proj is not None:

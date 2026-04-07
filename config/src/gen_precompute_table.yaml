@@ -1,0 +1,32 @@
+data:
+  name: odqa
+  data_path: data/train/odqa_train_with_id.jsonl
+  
+  max_seq_length: 256
+  max_ans_length: 32
+
+  batch_size: 1
+  num_workers: 0
+  topk_per_query: 10
+  test_size: 0.05
+  seed: 42
+
+model:
+  model_name: meta-llama/Meta-Llama-3-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+
+seed: 42
+debug_mode: False  # Only activate when debugging
+
+self_task_prompt_name: base
+generate_prompt_name: base
+base_prompt_name: pure-llm-brief-2
+
+output_dir: /workspaces/kvzip_nlplab/checkpoint
+project_name: caformer
+exp_type: multi

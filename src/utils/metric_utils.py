@@ -6,7 +6,8 @@ from typing import List, Union
 from dataclasses import dataclass
 from pydantic import BaseModel
 
-class MetricResult(BaseModel):
+@dataclass
+class MetricResult:
     soft_em: bool
     recall: float
     precision: float

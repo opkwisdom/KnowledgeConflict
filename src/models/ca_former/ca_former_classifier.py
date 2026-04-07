@@ -74,7 +74,14 @@ class CAFormerGGClassifier(nn.Module):
             raise NotImplementedError(f"Pooling strategy {self.config.caformer.pooling_strategy} not implemented.")
         return pooled_output
 
-    def forward(self, llm_hidden_states: torch.FloatTensor, attention_mask: torch.LongTensor, output_hidden_states: bool = True):
+    def forward(
+        self,
+        llm_hidden_states: torch.FloatTensor,
+        attention_mask: torch.LongTensor,
+        question_input_ids: torch.LongTensor = None,
+        question_attention_mask: torch.LongTensor = None,
+        output_hidden_states: bool = True,
+    ):
         """
         Args:
             llm_hidden_states: Tensor of shape (B, L, S, D_llm)
@@ -82,7 +89,7 @@ class CAFormerGGClassifier(nn.Module):
             scores: Tensor of shape (B, 1)
             query_hidden_states: Tensor of shape (B, K, D_llm)
         """
-        _, query_hidden_states = self.ca_former(llm_hidden_states, attention_mask)   # (B, K, D_llm)
+        _, query_hidden_states = self.ca_former(llm_hidden_states, attention_mask, question_input_ids, question_attention_mask)   # (B, K, D_llm)
         pooled_output = self.pooling(query_hidden_states)
         scores = self.classifier(pooled_output).flatten()
         outputs = (scores,)

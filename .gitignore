@@ -11,3 +11,5 @@ index/
 **/src/results
 **/*.html
 **/.env
+**/results
+**/*.txt

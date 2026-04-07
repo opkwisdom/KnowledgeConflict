@@ -7,11 +7,14 @@ from transformers import AutoModelForCausalLM, AutoModel
 import logging
 import torch
 import os
+import omegaconf.base
 
 from models import MultiHiddenCAFormer, CAFormerGGClassifier, load_model
 from datamodule import GGDataModule
 from lit_modules import GGLightningModule
 from utils import setup_logger, load_config
+
+
 
 def load_checkpoint(model, checkpoint_path):
     logger = logging.getLogger(__name__)
@@ -34,8 +37,11 @@ def load_checkpoint(model, checkpoint_path):
 
 
 def main():
-    torch.serialization.add_safe_globals([DictConfig, ListConfig, OmegaConf])
-    
+    torch.serialization.add_safe_globals([DictConfig, ListConfig, OmegaConf, omegaconf.base.ContainerMetadata])
+    # Allow TF32 (This can be useful for mixed precision training)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     config = load_config()
     seed_everything(config.seed)
     experiment_name = "stage3_gradient_guided_train"
@@ -63,7 +69,8 @@ def main():
     from_stage2 = "fromST2" if resume else "Scratch"
     output_dir = os.path.join(config.output_dir,
                               (f"{config.exp_type}_LR={config.train.learning_rate}"
-                               f"_{from_stage2}_freeze={config.train.freeze_pretrained}"))
+                               f"_{from_stage2}_BS={config.data.batch_size}_AGB={config.train.accumulate_grad_batches}"
+                               f"_Q={config.train.append_question}"))
     checkpoint_callback = ModelCheckpoint(
         monitor='valid/loss',
         dirpath=output_dir,
@@ -87,6 +94,7 @@ def main():
         accelerator="gpu",
         devices="auto",
         # devices=[0],
+        # strategy="ddp",     # DDP without find_unused_parameters since CAFormer is frozen
         strategy="ddp_find_unused_parameters_true",     # LLM parameters are frozen
         log_every_n_steps=5,   # More frequent logging
         max_epochs=config.train.max_epochs,
@@ -97,6 +105,7 @@ def main():
         # accumulate_grad_batches=1,
         accumulate_grad_batches=config.train.accumulate_grad_batches,
         # enable_progress_bar=(not config.debug_mode),  # Debugging purpose
+        inference_mode=False,
     )
 
     ckpt_path = None

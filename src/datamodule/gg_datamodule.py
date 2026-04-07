@@ -20,9 +20,11 @@ class GGDataset(Dataset):
         self.data = data
         self.cfg = cfg
         self.llm_tokenizer = AutoTokenizer.from_pretrained(cfg.model.model_name)
+        self.roberta_tokenizer = AutoTokenizer.from_pretrained("roberta-base")
         if self.llm_tokenizer.pad_token is None:
             self.llm_tokenizer.pad_token_id = 128004
         self.llm_tokenizer.padding_side = "right"
+        self.roberta_tokenizer.padding_side = "right"
 
     def __len__(self):
         return len(self.data)
@@ -50,6 +52,15 @@ class GGDataset(Dataset):
         )
         q_len = question_inputs["input_ids"].shape[1]
         a_len = answer_inputs["input_ids"].shape[1]
+
+        # Roberta question inputs
+        roberta_question_inputs = self.roberta_tokenizer(
+            formatted_question,
+            truncation=True,
+            max_length=self.cfg.data.max_seq_length,
+            return_tensors="pt",
+            add_special_tokens=False
+        )
 
         # Construct document inputs and source inputs
         doclen_list = []
@@ -124,6 +135,7 @@ class GGDataset(Dataset):
         target_labels[target_len - a_len:target_len] = padded_target_ids[target_len - a_len:target_len]
 
         return {
+            "idx": item.idx,
             "doc_input_ids": torch.stack(padded_doc_ids),                   # (k, max_seq_length)
             "doc_attention_mask": torch.stack(padded_doc_masks),            # (k, max_seq_length)
             "source_input_ids": torch.stack(padded_source_ids),             # (k, max_seq_length)
@@ -132,7 +144,9 @@ class GGDataset(Dataset):
             "target_attention_mask": padded_target_attention_mask,          # (k * max_seq_length + max_ans_length,)
             "doclen_list": torch.tensor(doclen_list),                       # (k,)
             "target_labels": target_labels,                                 # (k * max_seq_length + max_ans_length,)
-            "a_len": torch.tensor(a_len)                                    # (1,)   
+            "a_len": torch.tensor(a_len),                                   # (1,)   
+            "question_ids": roberta_question_inputs["input_ids"].squeeze(0),                # (q_len,)
+            "question_attention_mask": roberta_question_inputs["attention_mask"].squeeze(0),  # (q_len,)
         }
 
 
@@ -172,6 +186,7 @@ class GGDataModule(LightningDataModule):
         flat_source_attention_mask = torch.stack([item["source_attention_mask"] for item in batch]).reshape(-1, S_D)  # (B * K, S_D)
         
         return {
+            "idx": torch.tensor([item["idx"] for item in batch]),    # (B,)
             "doc_input_ids": flat_doc_input_ids,                   # (B * K, S_D)
             "doc_attention_mask": flat_doc_attention_mask,        # (B * K, S_D)
             "source_input_ids": flat_source_input_ids,             # (B * K, S_D)
@@ -180,7 +195,9 @@ class GGDataModule(LightningDataModule):
             "target_attention_mask": torch.stack([item["target_attention_mask"] for item in batch]),  # (B, K * S_D + max_ans_length)
             "doclen_list": torch.stack([item["doclen_list"] for item in batch]),                  # (B, K)
             "target_labels": torch.stack([item["target_labels"] for item in batch]),                   # (B, K * S_D + max_ans_length)
-            "a_len": torch.stack([item["a_len"] for item in batch])                            # (B,)
+            "a_len": torch.stack([item["a_len"] for item in batch]),                            # (B,)
+            "question_ids": torch.stack([item["question_ids"] for item in batch]),                            # (B, q_len)
+            "question_attention_mask": torch.stack([item["question_attention_mask"] for item in batch]),    # (B, q_len)
         }
 
     def train_dataloader(self):

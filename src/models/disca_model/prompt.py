@@ -16,9 +16,15 @@ PSEUDO_PASSAGE_PROMPT = {
 }
 
 GENERATE_PROMPT = {
+    # "base": (
+    #     "Context is provided above. "
+    #     "Read the context carefully and answer the question based on it.\n\n"
+    #     "Question: {question}\n\n"
+    #     "Answer: "
+    # ),
     "base": (
         "Context is provided above. "
-        "Read the context carefully and answer the question based on it.\n\n"
+        "Read the context carefully and answer the question based on it briefly.\n\n"
         "Question: {question}\n\n"
         "Answer: "
     ),
