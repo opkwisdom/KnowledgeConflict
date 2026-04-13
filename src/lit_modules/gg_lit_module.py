@@ -4,6 +4,7 @@ import logging
 import wandb
 import einops
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
 from typing import Union
 from pytorch_lightning import LightningModule
 from omegaconf import DictConfig
@@ -28,10 +29,13 @@ class GGLightningModule(LightningModule):
         self.learning_rate = cfg.learning_rate
         self.n_iter = getattr(cfg, "n_iter", 1)
         self.oracle_mode = getattr(cfg, "oracle_mode", "whole")
-        self.lambda_g = getattr(cfg, "lambda_g", 1.0) 
+        self.lmbda = getattr(cfg, "lmbda", 1.0) 
 
+        self.score_transform = getattr(cfg, "score_transform", None)
         self.scaling_factor = getattr(cfg, "scaling_factor", 1.0)
-        self.guide_loss_fn = nn.L1Loss()
+        self.T = getattr(cfg, "T", 1.0)
+        # self.guide_loss_fn = nn.L1Loss() if self.score_transform is None else nn.BCEWithLogitsLoss()
+        self.guide_loss_fn = nn.MSELoss()
         self.gen_loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
         self.val_logits = []
@@ -50,10 +54,14 @@ class GGLightningModule(LightningModule):
         # This is useful for fine-tuning adapter weights while keeping the model weights fixed.
         self.llm.enable_input_require_grads()
         self.llm.gradient_checkpointing_enable()
+        if hasattr(self.llm.config, "attention_dropout"):
+            self.llm.config.attention_dropout = 0.0
+        if hasattr(self.llm.config, "dropout"):
+            self.llm.config.dropout = 0.0
 
     def train(self, mode: bool = True):
         super().train(mode)
-        self.llm.eval()  # Ensure the base model is always in eval mode
+        # self.llm.eval()  # Ensure the base model is always in eval mode
 
     def forward(self, batch):
         """
@@ -62,6 +70,17 @@ class GGLightningModule(LightningModule):
             doc_repr: Tensor of shape (B*K, D_llm) - LLM representation of the document (using <EOS> token)
             llm_repr: Tensor of shape (B*K, L, S, D_llm) - LLM hidden states for CA-Former input
         """
+        # Generate LLM hidden states for CA-Former input
+        with torch.no_grad():
+            llm_outputs = self.llm(
+                input_ids=batch["source_input_ids"],
+                attention_mask=batch["source_attention_mask"],
+                output_hidden_states=True,
+            )
+            llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
+        return llm_repr
+    
+    def get_doc_repr(self, batch):
         # Generate LLM hidden states of documents, last layer only, <EOS> token
         # Since we use right-padding, we should track the position of <EOS> token
         with torch.no_grad():
@@ -75,16 +94,7 @@ class GGLightningModule(LightningModule):
             D_llm = last_hidden_state.shape[-1]
             gather_indices = last_token_indices.view(-1, 1, 1).expand(-1, 1, D_llm)
             doc_repr = torch.gather(last_hidden_state, dim=1, index=gather_indices).squeeze(1)  # (B*K, D_llm)
-
-        # Generate LLM hidden states for CA-Former input
-        with torch.no_grad():
-            llm_outputs = self.llm(
-                input_ids=batch["source_input_ids"],
-                attention_mask=batch["source_attention_mask"],
-                output_hidden_states=True,
-            )
-            llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
-        return doc_repr, llm_repr
+        return doc_repr
     
     def compute_oracle_loss_gradients(self, batch):
         """
@@ -154,7 +164,7 @@ class GGLightningModule(LightningModule):
         # scaling up
         scores_oracle = scores_oracle * self.scaling_factor
         return scores_oracle
-
+    
     def compute_interleaving_loss(self, target_input_ids, target_attention_mask, query_hidden_states, doclen_list, a_len_list, return_logits=False):
         """
         Compute the generation loss conditioned on the interleaving document inputs.
@@ -173,58 +183,52 @@ class GGLightningModule(LightningModule):
         full_repr = self.llm.get_input_embeddings()(target_input_ids)   # (B, L_total, D_llm)
         B, K = doclen_list.shape
         _, _, D = full_repr.shape
-        input_embeds = []
-        target_ids_list = []
+        
+        input_embeds_list = []
+        effective_len_list = []
+        attention_mask_list = []
+        labels_list = []
+        
         for i in range(B):
             start_pos = 0
             sample_input_embeds = []
+            
+            effective_len = int(target_attention_mask[i].sum().item())
+            a_len = int(a_len_list[i].item())
+            
             for j in range(K):
                 flat_idx = i*K + j
-                doclen = doclen_list[i, j]
+                doclen = int(doclen_list[i, j].item())
                 end_pos = start_pos + doclen
-                each_doc_repr = full_repr[i, start_pos:end_pos]    # (doc_len, D_llm)
-                each_doc_repr = torch.cat([each_doc_repr, query_hidden_states[flat_idx]], dim=0)    # (doc_len + S, D_llm)
-                sample_input_embeds.append(each_doc_repr)
+                
+                sample_input_embeds.append(full_repr[i, start_pos:end_pos])    # (doc_len, D_llm)
+                sample_input_embeds.append(query_hidden_states[flat_idx])    # (S, D_llm)
                 start_pos = end_pos
-            # Append the Q + A part
-            effective_len = target_attention_mask[i].sum().item()
             sample_input_embeds.append(full_repr[i, start_pos:effective_len])
             sample_input_embeds = torch.cat(sample_input_embeds, dim=0)
-            target_ids = target_input_ids[i, effective_len - a_len_list[i]:effective_len]   # (a_len,)
-            target_ids_list.append(target_ids)
-            input_embeds.append(sample_input_embeds)
-        
-        # Pad manually
-        padded_inputs_embeds = []
-        padded_inputs_attention_mask = []
-        padded_target_labels = []
-        effective_len_list = []
-
-        max_len_in_batch = max([embed.shape[0] for embed in input_embeds])
-        safe_max_len = min(max_len_in_batch, self.cfg.max_interleaving_len)
-
-        for input_embed, a_len, target_ids in zip(input_embeds, a_len_list, target_ids_list):
-            input_len = input_embed.shape[0]
-            effective_len_list.append(input_len)
             
-            pad_len = max(0, safe_max_len - input_len)
-            padded_input_embed = torch.cat([input_embed, torch.zeros(pad_len, D, device=input_embed.device, dtype=input_embed.dtype)], dim=0)
-            padded_inputs_embeds.append(padded_input_embed)
+            # safe max length
+            if sample_input_embeds.shape[0] > self.cfg.max_interleaving_len:
+                sample_input_embeds = sample_input_embeds[:self.cfg.max_interleaving_len]
+            
+            seq_len = sample_input_embeds.shape[0]
+            target_label = torch.full((seq_len,), -100, dtype=torch.long, device=sample_input_embeds.device)
+            target_ids = target_input_ids[i, effective_len - a_len:effective_len]   # (a_len,)
+            
+            valid_a_len = min(a_len, seq_len)
+            target_label[-valid_a_len:] = target_ids[-valid_a_len:]
+            labels_list.append(target_label)
+            effective_len_list.append(seq_len)
+            input_embeds_list.append(sample_input_embeds)
+            attention_mask_list.append(torch.ones(seq_len, dtype=torch.long, device=sample_input_embeds.device))
 
-            padded_input_attention_mask = torch.ones(input_len + pad_len, device=input_embed.device, dtype=torch.long)
-            if pad_len > 0:
-                padded_input_attention_mask[-pad_len:] = 0
-            padded_inputs_attention_mask.append(padded_input_attention_mask)
-
-            padded_target_label = torch.full((padded_input_attention_mask.shape[0],), -100, device=input_embed.device, dtype=torch.long)
-            padded_target_label[input_len - a_len:input_len] = target_ids
-            padded_target_labels.append(padded_target_label)
-        
-        padded_inputs_embeds = torch.stack(padded_inputs_embeds)   # (B, L_total + K*S, D_llm)
-        padded_inputs_attention_mask = torch.stack(padded_inputs_attention_mask)   # (B, L_total + K*S)
-        padded_target_labels = torch.stack(padded_target_labels)   # (B, L_total + K*S)
+        # Pad manually
+        padded_inputs_embeds = pad_sequence(input_embeds_list, batch_first=True, padding_value=0.0)
+        padded_inputs_attention_mask = pad_sequence(attention_mask_list, batch_first=True, padding_value=0)
+        padded_target_labels = pad_sequence(labels_list, batch_first=True, padding_value=-100)
 
         # Generate logits and compute loss
+        # GPU MEMORY BOTTLENECK!! (~13GB for 10 docs)
         llm_outputs = self.llm(
             inputs_embeds=padded_inputs_embeds,
             attention_mask=padded_inputs_attention_mask,
@@ -251,22 +255,39 @@ class GGLightningModule(LightningModule):
             # Add as result
             outputs += (batch_logits, batch_labels)
         return outputs
+    
+    def transform_scores_oracle(self, scores_oracle):
+        if self.cfg.score_transform is None:
+            return self.scaling_factor * scores_oracle
+        elif self.cfg.score_transform == "sigmoid":
+            return torch.sigmoid(scores_oracle / self.T)
+        elif self.cfg.score_transform == "tanh":
+            return torch.tanh(scores_oracle / self.T)
+        else:
+            raise ValueError(f"Unknown score transform: {self.cfg.score_transform}")
 
     def training_step(self, batch, batch_idx):
-        doc_repr, llm_repr = self.forward(batch)
-        # allow gradients to flow back to doc_repr for oracle loss calculation
-        doc_repr = doc_repr.detach()
+        llm_repr = self.forward(batch)
         scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"],
                                                             batch["question_ids"], batch["question_attention_mask"])
         del llm_repr
 
-        # Compute the gradient of the oracle loss and target score
-        loss_oracle, loss_gradients = self.compute_oracle_loss_gradients(batch)
-        scores_oracle = self.compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])    # (B*K, 1)
-        scores_oracle = scores_oracle.detach()
-        del loss_gradients, doc_repr
+        use_precompute_table = batch["scores_oracle"] is not None
+        if not use_precompute_table:
+            doc_repr = self.get_doc_repr(batch).detach()
+            # Compute the gradient of the oracle loss and target score
+            loss_oracle, loss_gradients = self.compute_oracle_loss_gradients(batch)
+            scores_oracle = self.compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])    # (B*K, 1)
+            scores_oracle = scores_oracle.detach()
+            del loss_gradients, doc_repr
+        else:
+            scores_oracle = batch["scores_oracle"].reshape(-1, 1)   # (B*K, 1)
+            scores_oracle = scores_oracle.to(scores_hat.device)
+            scores_oracle = self.transform_scores_oracle(scores_oracle)
 
         # Guide loss
+        scores_hat = scores_hat.view(-1)
+        scores_oracle = scores_oracle.view(-1)
         guide_loss = self.guide_loss_fn(scores_hat, scores_oracle)
         # Generation loss
         gen_loss = self.compute_interleaving_loss(
@@ -276,9 +297,10 @@ class GGLightningModule(LightningModule):
             batch["doclen_list"],
             batch["a_len"]
         )[0]
-        loss = guide_loss + self.lambda_g * gen_loss
+        loss = self.lmbda * guide_loss + gen_loss
         
-        self.log("train/oracle_loss", loss_oracle, on_step=True, on_epoch=True, sync_dist=True)
+        if not use_precompute_table:
+            self.log("train/oracle_loss", loss_oracle, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train/guide_loss", guide_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train/gen_loss", gen_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train/loss", loss, on_step=True, on_epoch=True, sync_dist=True)
@@ -286,20 +308,29 @@ class GGLightningModule(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        doc_repr, llm_repr = self.forward(batch)
-        # allow gradients to flow back to doc_repr for oracle loss calculation
-        doc_repr = doc_repr.detach()
+        llm_repr = self.forward(batch)
         scores_hat, query_hidden_states = self.caformer_clf(llm_repr, batch["source_attention_mask"],
                                                             batch["question_ids"], batch["question_attention_mask"])
+        del llm_repr
 
         # Compute the gradient of the oracle loss and target score
         # Temporarily enable gradient tracking
-        with torch.enable_grad():
-            loss_oracle, loss_gradients = self.compute_oracle_loss_gradients(batch)
-        scores_oracle = self.compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])    # (B*K, 1)
-        scores_oracle = scores_oracle.detach()
+        use_precompute_table = batch["scores_oracle"] is not None
+        if not use_precompute_table:
+            doc_repr = self.get_doc_repr(batch).detach()
+            with torch.enable_grad():
+                loss_oracle, loss_gradients = self.compute_oracle_loss_gradients(batch)
+            scores_oracle = self.compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])    # (B*K, 1)
+            scores_oracle = scores_oracle.detach()
+            del loss_gradients, doc_repr
+        else:
+            scores_oracle = batch["scores_oracle"].reshape(-1, 1)   # (B*K, 1)
+            scores_oracle = scores_oracle.to(scores_hat.device)
+            scores_oracle = self.transform_scores_oracle(scores_oracle)
 
         # Guide loss
+        scores_hat = scores_hat.view(-1)
+        scores_oracle = scores_oracle.view(-1)
         guide_loss = self.guide_loss_fn(scores_hat, scores_oracle)
         # Generation loss
         gen_loss, batch_logits, batch_labels = self.compute_interleaving_loss(
@@ -310,12 +341,13 @@ class GGLightningModule(LightningModule):
             batch["a_len"],
             return_logits=True
         )
-        loss = guide_loss + self.lambda_g * gen_loss
-
+        loss = self.lmbda * guide_loss + gen_loss
+        
         self.val_logits.extend(batch_logits)
         self.val_labels.extend(batch_labels)
 
-        self.log("valid/oracle_loss", loss_oracle, on_step=False, on_epoch=True, sync_dist=True)
+        if not use_precompute_table:
+            self.log("valid/oracle_loss", loss_oracle, on_step=False, on_epoch=True, sync_dist=True)
         self.log("valid/guide_loss", guide_loss, on_step=False, on_epoch=True, sync_dist=True)
         self.log("valid/gen_loss", gen_loss, on_step=False, on_epoch=True, sync_dist=True)
         self.log("valid/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
@@ -356,7 +388,7 @@ class GGLightningModule(LightningModule):
 
     def configure_optimizers(self):
         trainable_params = filter(lambda p: p.requires_grad, self.caformer_clf.parameters())
-        optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate, fused=True)
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = int(self.cfg.warmup_ratio * total_steps)
 

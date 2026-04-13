@@ -10,6 +10,7 @@ import einops
 import torch
 import os
 import h5py
+import datetime
 import omegaconf.base
 from torch.utils.data import Subset
 
@@ -20,7 +21,8 @@ from utils import setup_logger, load_config
 def setup_ddp():
     """DDP 환경 초기화 함수"""
     if "WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl",
+                                timeout=datetime.timedelta(hours=5))
         local_rank = int(os.environ["LOCAL_RANK"])
         torch.cuda.set_device(local_rank)
         return local_rank, int(os.environ["WORLD_SIZE"])
@@ -123,13 +125,15 @@ def compute_oracle_loss_gradients(llm: AutoModelForCausalLM, batch):
         )[0]    # (B, k * max_seq_length + max_ans_length, D_llm)
         return loss_oracle.detach_(), loss_gradients
 
-def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, doclen_list: torch.Tensor):
+def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, doclen_list: torch.Tensor, a_len: torch.Tensor, question_ids: torch.Tensor):
     """
     Compute the target scores for CA-Former based on the gradients of the oracle loss.
     Args:
         loss_gradients: Tensor of shape (B, k * max_seq_length + max_ans_length, D_llm)
         doc_repr: Tensor of shape (B*k, D_llm)
         doclen_list: Tensor of shape (B, k)
+        a_len: Tensor of shape (B,)
+        question_ids: Tensor of shape (B,)
     Returns:
         scores_oracle: List of length B. Each element is a Dict containing different
                        types of oracle scores for that specific batch item.
@@ -143,8 +147,8 @@ def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, 
     loss_gradients_expanded = loss_gradients_expanded.reshape(B*K, -1, D)
     neg_loss_gradients_expanded = -1 * loss_gradients_expanded
     
-    modes = ["whole", "marginal", "topk"]
-    # ========== Oracle score computation ==========
+    modes = ["whole", "marginal", "marginal-qa", "topk", "topk-qa"]
+    # ========== Whole score computation ==========
     # Most naive way in parallel, faster
     scores_oracle_whole = einops.einsum(doc_repr, neg_loss_gradients_expanded,
                                 "b d, b l d -> b l").mean(dim=-1).reshape(B, -1)
@@ -153,30 +157,51 @@ def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, 
     # More fine-grained way using sequential processing, slower
     TOPK_RANGE = 10
     scores_oracle_marginal = torch.zeros(B, K, device=loss_gradients.device)
+    scores_oracle_marginal_qa = torch.zeros(B, K, device=loss_gradients.device)
     scores_oracle_topk = torch.zeros(B, K, TOPK_RANGE, device=loss_gradients.device)
+    scores_oracle_topk_qa = torch.zeros(B, K, TOPK_RANGE, device=loss_gradients.device)
     for i in range(B):
         start_pos = 0
+        qa_len = a_len[i] + question_ids[i].shape[0]
+        total_doc_len = doclen_list[i].sum()
         for j in range(K):
             flat_idx = i*K + j
             end_pos = start_pos + doclen_list[i, j]
+            qa_gradients = neg_loss_gradients_expanded[flat_idx, total_doc_len:total_doc_len + qa_len]
+            
             # ----- Marginal -----
             marginal_gradients = neg_loss_gradients_expanded[flat_idx, start_pos:end_pos]   # (doc_len, D_llm)
             each_doc_repr = doc_repr[flat_idx]     # (D_llm,)
             each_scores_oracle = einops.einsum(each_doc_repr, marginal_gradients,
                                                 "d, l d -> l").mean(dim=-1)
             scores_oracle_marginal[i, j] = each_scores_oracle
+            
+            # ----- Marginal-QA -----
+            marginal_qa_gradients = torch.cat([marginal_gradients, qa_gradients], dim=0)
+            each_scores_oracle = einops.einsum(each_doc_repr, marginal_qa_gradients,
+                                               "d, l d -> l").mean(dim=-1)
+            scores_oracle_marginal_qa[i, j] = each_scores_oracle
 
-            # ----- Top-k -----
+            # ----- Top-k & Top-k-QA -----
             norms = marginal_gradients.norm(p=2, dim=-1)
             actual_topk = min(TOPK_RANGE, marginal_gradients.shape[0])
             if actual_topk > 0:
                 topk_indices = torch.topk(norms, k=actual_topk).indices
+                
                 topk_grads = marginal_gradients[topk_indices]
                 topk_scores = einops.einsum(each_doc_repr, topk_grads,
                                             "d, k d -> k")
+                
+                topk_qa_grads = torch.cat([topk_grads, qa_gradients], dim=0)
+                topk_qa_scores = einops.einsum(each_doc_repr, topk_qa_grads,
+                                               "d, k d -> k").mean(dim=-1)
+                
+                # Normalize
                 range_vectors = torch.arange(1, actual_topk + 1, device=topk_scores.device)
                 topk_cum_grads = torch.cumsum(topk_scores, dim=0) / range_vectors
+                topk_qa_cum_grads = torch.cumsum(topk_qa_scores, dim=0) / range_vectors
                 scores_oracle_topk[i, j, :actual_topk] = topk_cum_grads
+                scores_oracle_topk_qa[i, j, :actual_topk] = topk_qa_cum_grads
             start_pos = end_pos
     
     # ========== Flatten to List of Dicts ==========
@@ -185,9 +210,11 @@ def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, 
         item_scores = {
             "whole": scores_oracle_whole[i].detach().cpu().float().numpy(),
             "marginal": scores_oracle_marginal[i].detach().cpu().float().numpy(),
+            "marginal-qa": scores_oracle_marginal_qa[i].detach().cpu().float().numpy()
         }
         for topk in range(TOPK_RANGE):
             item_scores[f"topk_{topk+1}"] = scores_oracle_topk[i, :, topk].detach().cpu().float().numpy()
+            item_scores[f"topk-qa_{topk+1}"] = scores_oracle_topk_qa[i, :, topk].detach().cpu().float().numpy()
         scores_oracle.append(item_scores)
     
     return scores_oracle
@@ -196,7 +223,7 @@ def get_completed_ids(world_size, final_output_path):
     completed = set()
     # import pdb; pdb.set_trace()
     for r in range(world_size):
-        tmp_path = f"{final_output_path}_rank1.tmp"
+        tmp_path = f"{final_output_path}_rank{r}.tmp"
         if os.path.exists(tmp_path):
             try:
                 with h5py.File(tmp_path, "r") as h5file:
@@ -249,7 +276,7 @@ def main():
         dist.barrier()
     
     output_base_dir = os.path.join(config.output_dir, get_model_name(config.model.model_name))
-    final_output_path = os.path.join(output_base_dir, "precompute_table_test.h5")
+    final_output_path = os.path.join(output_base_dir, "nq_val_precompute_table.h5")
 
     # Resume logic
     global_completed_ids = get_completed_ids(world_size, final_output_path)
@@ -297,7 +324,7 @@ def main():
     if dist.is_initialized():
         dist.barrier()
     
-    final_output_path = os.path.join(output_base_dir, "precompute_table_test.h5")
+    final_output_path = os.path.join(output_base_dir, "nq_val_precompute_table.h5")
     temp_output_path = f"{final_output_path}_rank{local_rank}.tmp"
 
     with h5py.File(temp_output_path, "a") as h5file:
@@ -310,13 +337,13 @@ def main():
                 if all(b_id in h5file for b_id in batch_ids):
                     continue
 
-                batch = {k: v.to(local_rank) for k, v in batch.items()}
+                batch = {k: v.to(local_rank) if hasattr(v, "to") else v for k, v in batch.items()}
                 doc_repr, llm_repr = forward(llm, batch)
                 del llm_repr
 
                 with torch.enable_grad():
                     loss_oracle, loss_gradients = compute_oracle_loss_gradients(llm, batch)
-                    scores_oracle = compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"])
+                    scores_oracle = compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"], batch["a_len"], batch["question_ids"])
                 
                 # Store the gradients in the precompute table
                 for i in range(batch["idx"].shape[0]):

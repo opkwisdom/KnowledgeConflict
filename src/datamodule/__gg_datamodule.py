@@ -30,6 +30,10 @@ class GGDataset(Dataset):
 
         # Pre-compute table related attributes
         self.use_precompute_table = cfg.data.use_precompute_table
+        self.precompute_path = cfg.data.precompute_table_path if self.use_precompute_table else None
+        self.score_mode = getattr(cfg.train, "oracle_mode", "marginal")
+        self.h5_file = None
+
 
     def __len__(self):
         return len(self.data)
@@ -81,27 +85,87 @@ class GGDataset(Dataset):
                 return_tensors="pt",
                 add_special_tokens=False
             )
-            
-            doc_input_ids.append(torch.cat([tokenized_ctx["input_ids"], torch.tensor([[self.llm_tokenizer.eos_token_id]])], dim=1).squeeze(0))
-            source_input_ids.append(torch.cat([tokenized_ctx["input_ids"], question_inputs["input_ids"]], dim=1).squeeze(0))
-            target_input_ids.append(tokenized_ctx["input_ids"].squeeze(0))
-            doclen_list.append(tokenized_ctx["input_ids"].shape[1])
 
+            # Append document length for later use
+            doclen_list.append(tokenized_ctx.attention_mask.sum().item())
+
+            ### ========== Document input for extracting document hidden states ========== ###
+            # Append EOS token to the end of each document input to extract hidden states of document
+            tokenized_doc = torch.cat([tokenized_ctx["input_ids"], torch.tensor([[self.llm_tokenizer.eos_token_id]])], dim=1)
+            doc_input_ids.append(tokenized_doc.squeeze(0))
+
+            ### ========== Source input for CAFormer ========== ###
+            # Append D + Q as source input
+            tokenized_source = torch.cat([tokenized_ctx["input_ids"], question_inputs["input_ids"]], dim=1)
+            source_input_ids.append(tokenized_source.squeeze(0))
+
+            ### ========== Target input for loss calculation ========== ###
+            # Append D1 + ... + Dk as target input (without question + answer)
+            target_input_ids.append(tokenized_ctx["input_ids"].squeeze(0))
+        
         # Concate D1 + ... + Dk + Q + A as target input
         target_input_ids = torch.cat(target_input_ids, dim=0)
         target_input_ids = torch.cat([target_input_ids, question_inputs["input_ids"][0], answer_inputs["input_ids"][0]], dim=0)
+        target_attention_mask = torch.ones_like(target_input_ids)
+
+        # Pad source inputs and document inputs to the same length, right padding
+        pad_token_id = self.llm_tokenizer.pad_token_id
+
+        padded_doc_ids = []
+        padded_doc_masks = []
+        padded_source_ids = []
+        padded_source_masks = []
+
+        for i in range(len(item.ctxs)):
+            # Pad document input
+            d_ids = doc_input_ids[i]
+            d_mask = torch.ones_like(d_ids)
+            
+            pad_len_doc = max(0, self.cfg.data.max_seq_length - len(d_ids))
+            
+            padded_doc_ids.append(F.pad(d_ids, (0, pad_len_doc), value=pad_token_id))
+            padded_doc_masks.append(F.pad(d_mask, (0, pad_len_doc), value=0))
+
+            # Pad source input
+            s_ids = source_input_ids[i]
+            s_mask = torch.ones_like(s_ids)
+            
+            pad_len_src = max(0, self.cfg.data.max_seq_length - len(s_ids))
+            padded_source_ids.append(F.pad(s_ids, (0, pad_len_src), value=pad_token_id))
+            padded_source_masks.append(F.pad(s_mask, (0, pad_len_src), value=0))
+        # Pad target input
+        pad_len_tgt = max(0, self.cfg.data.topk_per_query * self.cfg.data.max_seq_length + self.cfg.data.max_ans_length - len(target_input_ids))
+        padded_target_ids = F.pad(target_input_ids, (0, pad_len_tgt), value=pad_token_id)
+        padded_target_attention_mask = F.pad(target_attention_mask, (0, pad_len_tgt), value=0)
+
+        # Make label for loss calculation
+        target_len = padded_target_attention_mask.sum().item()
+        target_labels = torch.full_like(padded_target_ids, -100)
+        target_labels[target_len - a_len:target_len] = padded_target_ids[target_len - a_len:target_len]
 
         scores_oracle = None
         if self.use_precompute_table:
-            scores_oracle = self.oracle_cache[str(item.idx)]
+            # Load pre-compute table if not loaded
+            if self.h5_file is None:
+                logger.info(f"Loading pre-compute table")
+                # Open in read-only mode with SWMR(Single Writer Multiple Reader) enabled
+                self.h5_file = h5py.File(self.precompute_path, "r", swmr=True)
+            # Get pre-compute table for the current question
+            example_id = str(item.idx)
+            scores_oracle = self.h5_file[example_id][self.score_mode][:]
+            scores_oracle = torch.tensor(scores_oracle, dtype=torch.bfloat16)
 
         return {
             "idx": item.idx,
-            "doc_input_ids": doc_input_ids,                  # (k, max_seq_length)
-            "source_input_ids": source_input_ids,             # (k, max_seq_length)
-            "target_input_ids": target_input_ids,                          # (k * max_seq_length + max_ans_length,)
-            "doclen_list": doclen_list,                       # (k,)
-            "a_len": a_len,                                   # (1,)   
+            "doc_input_ids": torch.stack(padded_doc_ids),                   # (k, max_seq_length)
+            "doc_attention_mask": torch.stack(padded_doc_masks),            # (k, max_seq_length)
+            "source_input_ids": torch.stack(padded_source_ids),             # (k, max_seq_length)
+            "source_attention_mask": torch.stack(padded_source_masks),      # (k, max_seq_length)
+            "target_input_ids": padded_target_ids,                          # (k * max_seq_length + max_ans_length,)
+            "target_attention_mask": padded_target_attention_mask,          # (k * max_seq_length + max_ans_length,)
+            "doclen_list": torch.tensor(doclen_list),                       # (k,)
+            "target_labels": target_labels,                                 # (k * max_seq_length + max_ans_length,)
+            "a_len": torch.tensor(a_len),                                   # (1,)   
             "question_ids": roberta_question_inputs["input_ids"].squeeze(0),                # (q_len,)
             "question_attention_mask": roberta_question_inputs["attention_mask"].squeeze(0),  # (q_len,)
             "scores_oracle": scores_oracle,  # (k,) or None
@@ -116,7 +180,6 @@ class GGDataModule(LightningDataModule):
         self.model_cfg = cfg.model
         self.batch_size = self.data_cfg.batch_size
         self.num_workers = self.data_cfg.num_workers
-        self.pad_token_id = 128004
 
     def setup(self, stage: Optional[str] = None):
         full_data = load_relevance_dataset(self.data_cfg.data_path)
@@ -147,60 +210,24 @@ class GGDataModule(LightningDataModule):
         Collate function to combine multiple docs into a single batch.
         """
         B = len(batch)
-        K = len(batch[0]["doc_input_ids"])
-        
-        max_seq_len = self.data_cfg.max_seq_length
-        max_tgt_len = self.data_cfg.topk_per_query * max_seq_len + self.data_cfg.max_ans_length
-        
-        flat_doc_ids = torch.full((B * K, max_seq_len), self.pad_token_id, dtype=torch.long)
-        flat_doc_mask = torch.zeros((B * K, max_seq_len), dtype=torch.long)
-        flat_source_ids = torch.full((B * K, max_seq_len), self.pad_token_id, dtype=torch.long)
-        flat_source_mask = torch.zeros((B * K, max_seq_len), dtype=torch.long)
-        
-        padded_target_ids = torch.full((B, max_tgt_len), self.pad_token_id, dtype=torch.long)
-        padded_target_mask = torch.zeros((B, max_tgt_len), dtype=torch.long)
-        target_labels = torch.full((B, max_tgt_len), -100, dtype=torch.long)
-        
-        for i, item in enumerate(batch):
-            for j in range(K):
-                idx = i*K + j
-                
-                # Doc
-                d_ids = item["doc_input_ids"][j]
-                d_len = min(len(d_ids), max_seq_len)
-                flat_doc_ids[idx, :d_len] = d_ids[:d_len]
-                flat_doc_mask[idx, :d_len] = 1
-                
-                # Source
-                s_ids = item["source_input_ids"][j]
-                s_len = min(len(s_ids), max_seq_len)
-                flat_source_ids[idx, :s_len] = s_ids[:s_len]
-                flat_source_mask[idx, :s_len] = 1
-
-            # Target
-            t_ids = item["target_input_ids"]
-            t_len = min(len(t_ids), max_tgt_len)
-            padded_target_ids[i, :t_len] = t_ids[:t_len]
-            padded_target_mask[i, :t_len] = 1
-            
-            # Label
-            a_len = item["a_len"]
-            valid_a_len = min(a_len, t_len)
-            target_labels[i, t_len - valid_a_len : t_len] = padded_target_ids[i, t_len - valid_a_len : t_len]
-
+        K, S_D = batch[0]["doc_input_ids"].shape
+        flat_doc_input_ids = torch.stack([item["doc_input_ids"] for item in batch]).reshape(-1, S_D)  # (B * K, S_D)
+        flat_doc_attention_mask = torch.stack([item["doc_attention_mask"] for item in batch]).reshape(-1, S_D)  # (B * K, S_D)
+        flat_source_input_ids = torch.stack([item["source_input_ids"] for item in batch]).reshape(-1, S_D)  # (B * K, S_D)
+        flat_source_attention_mask = torch.stack([item["source_attention_mask"] for item in batch]).reshape(-1, S_D)  # (B * K, S_D)
         use_scores_oracle = batch[0]["scores_oracle"] is not None
         
         return {
             "idx": torch.tensor([item["idx"] for item in batch]),    # (B,)
-            "doc_input_ids": flat_doc_ids,                   # (B * K, S_D)
-            "doc_attention_mask": flat_doc_mask,        # (B * K, S_D)
-            "source_input_ids": flat_source_ids,             # (B * K, S_D)
-            "source_attention_mask": flat_source_mask,  # (B * K, S_D)
-            "target_input_ids": padded_target_ids,          # (B, K * S_D + max_ans_length)
-            "target_attention_mask": padded_target_mask,  # (B, K * S_D + max_ans_length)
-            "doclen_list": torch.tensor([item["doclen_list"] for item in batch]),                  # (B, K)
-            "target_labels": target_labels,                   # (B, K * S_D + max_ans_length)
-            "a_len": torch.tensor([item["a_len"] for item in batch]),                            # (B,)
+            "doc_input_ids": flat_doc_input_ids,                   # (B * K, S_D)
+            "doc_attention_mask": flat_doc_attention_mask,        # (B * K, S_D)
+            "source_input_ids": flat_source_input_ids,             # (B * K, S_D)
+            "source_attention_mask": flat_source_attention_mask,  # (B * K, S_D)
+            "target_input_ids": torch.stack([item["target_input_ids"] for item in batch]),          # (B, K * S_D + max_ans_length)
+            "target_attention_mask": torch.stack([item["target_attention_mask"] for item in batch]),  # (B, K * S_D + max_ans_length)
+            "doclen_list": torch.stack([item["doclen_list"] for item in batch]),                  # (B, K)
+            "target_labels": torch.stack([item["target_labels"] for item in batch]),                   # (B, K * S_D + max_ans_length)
+            "a_len": torch.stack([item["a_len"] for item in batch]),                            # (B,)
             "question_ids": torch.stack([item["question_ids"] for item in batch]),                            # (B, q_len)
             "question_attention_mask": torch.stack([item["question_attention_mask"] for item in batch]),    # (B, q_len)
             "scores_oracle": torch.stack([item["scores_oracle"] for item in batch]) if use_scores_oracle else None,  # (B, K) or None

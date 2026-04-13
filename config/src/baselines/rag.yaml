@@ -1,8 +1,11 @@
 data:
   name: nq
-  data_path: data/nq/parametric_relevance_tagged/validation.json
+  data_path: data/nq/retrieved/validation.jsonl
   max_seq_length: 1024
   use_single_context: False
+
+  topk_per_query: 10
+  do_rerank: False
 
 model:
   model_name: meta-llama/Meta-Llama-3-8B-Instruct

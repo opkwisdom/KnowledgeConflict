@@ -1,0 +1,32 @@
+data:
+  name: nq
+  data_path: data/nq/retrieved/validation.jsonl
+  
+  max_query_length: 32
+  max_seq_length: 256
+  max_length: 3072
+  use_single_context: False
+  do_rerank: True
+
+  topk_per_query: 5
+  batch_size: 4
+  seed: 42
+
+  precompute_table_path: /workspaces/kvzip_nlplab/checkpoint/gen_precompute_table/llama/nq_val_precompute_table.h5
+  score_mode: marginal-qa
+
+model:
+  model_name: meta-llama/Meta-Llama-3-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+
+seed: 42
+
+generate_prompt_name: base
+
+output_dir: src/results/tests/disca
+experiment_name: oracle_inference

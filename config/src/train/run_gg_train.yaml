@@ -1,6 +1,6 @@
 data:
   name: odqa
-  data_path: data/train/odqa_train.jsonl
+  data_path: data/prev_ds/train/odqa_train_with_id.jsonl
   
   max_seq_length: 256
   max_ans_length: 32
@@ -10,6 +10,9 @@ data:
   topk_per_query: 10
   test_size: 0.05
   seed: 42
+
+  use_precompute_table: True  # Use pre-compute table or not
+  precompute_table_path: /workspaces/kvzip_nlplab/checkpoint/gen_precompute_table/llama/precompute_table.h5
 
 model:
   model_name: meta-llama/Meta-Llama-3-8B-Instruct
@@ -29,7 +32,8 @@ caformer:
   dropout: 0.1
 
   use_linear_proj: True   # To embed as soft-prompt
-  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
+  # ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
+  ckpt_path: None         # From scratch
 
 train:
   learning_rate: 2e-5
@@ -37,13 +41,18 @@ train:
   max_epochs: 2
 
   n_iter: 1   # the number of iterations for Taylor approximation
-  oracle_mode: marginal
   max_interleaving_len:   # Post initialized
   freeze_pretrained: True
 
   scaling_factor: 10
   accumulate_grad_batches: 16
   append_question: True
+
+  oracle_mode: marginal   # [whole, marginal, top-1, ..., top-10]
+  score_transform: tanh     # [None, sigmoid, tanh]
+  T: 0.25
+
+  lmbda: 10         # gen loss weight
 
 seed: 42
 debug_mode: False  # Only activate when debugging
