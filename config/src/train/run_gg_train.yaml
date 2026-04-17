@@ -32,13 +32,13 @@ caformer:
   dropout: 0.1
 
   use_linear_proj: True   # To embed as soft-prompt
-  # ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
-  ckpt_path: None         # From scratch
+  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
+  # ckpt_path: None         # From scratch
 
 train:
   learning_rate: 2e-5
   warmup_ratio: 0.05
-  max_epochs: 2
+  max_epochs: 1
 
   n_iter: 1   # the number of iterations for Taylor approximation
   max_interleaving_len:   # Post initialized
@@ -54,12 +54,13 @@ train:
 
   lmbda: 10         # gen loss weight
 
+  do_isolate: True  # Document-Isolated Masking
+
+
 seed: 42
 debug_mode: False  # Only activate when debugging
 
-self_task_prompt_name: base
 generate_prompt_name: base
-base_prompt_name: pure-llm-brief-2
 
 output_dir: /workspaces/kvzip_nlplab/checkpoint
 project_name: caformer

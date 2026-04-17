@@ -1,6 +1,6 @@
 data:
   name: nq
-  data_path: data/nq/retrieved/validation.jsonl
+  data_path: data/nq/retrieved/validation_top100.jsonl
   max_seq_length: 1024
   use_single_context: False
 

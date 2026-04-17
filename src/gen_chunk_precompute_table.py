@@ -261,8 +261,8 @@ def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, 
                     topk_cum_grads = torch.cumsum(topk_scores, dim=0) / range_vectors
                     range_vectors_qa = torch.arange(1, actual_topk_qa + 1, device=topk_qa_scores.device)
                     topk_qa_cum_grads = torch.cumsum(topk_qa_scores, dim=0) / range_vectors_qa
-                    scores_oracle_topk[i, c, k, :actual_topk] = topk_cum_grads
-                    scores_oracle_topk_qa[i, c, k, :actual_topk] = topk_qa_cum_grads
+                    scores_oracle_topk[i, c, k, :actual_topk] = topk_cum_grads[:actual_topk]
+                    scores_oracle_topk_qa[i, c, k, :actual_topk] = topk_qa_cum_grads[:actual_topk]
                 start_pos = end_pos
     
     # ========== Flatten to List of Dicts ==========
@@ -288,15 +288,20 @@ def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, 
 
 def get_completed_ids(world_size, final_output_path):
     completed = set()
-    # import pdb; pdb.set_trace()
+
     for r in range(world_size):
-        tmp_path = f"{final_output_path}_rank{r}.tmp"
-        if os.path.exists(tmp_path):
-            try:
-                with h5py.File(tmp_path, "r") as h5file:
-                    completed.update(set(h5file.keys()))
-            except Exception as e:
-                pass
+        search_pattern = f"{final_output_path}_rank{r}_part*.tmp"
+        tmp_files = glob.glob(search_pattern)
+        for tmp_path in tmp_files:
+            if os.path.exists(tmp_path):
+                try:
+                    with h5py.File(tmp_path, "r") as h5file:
+                        completed.update(set(h5file.keys()))
+                except OSError as e:
+                    print(f"[Warning] 파일 손상 감지됨: {tmp_path}. 해당 파일은 무시하고 진행.")
+                    pass
+                except Exception as e:
+                    pass
     return completed
 
 def get_filtered_subset(dataset, completed_ids, is_main_process=False):
@@ -310,6 +315,15 @@ def get_filtered_subset(dataset, completed_ids, is_main_process=False):
                 valid_indices.append(i)
                 
     return Subset(dataset, valid_indices)
+
+def safe_open_h5(filepath, mode="a"):
+    try:
+        return h5py.File(filepath, mode)
+    except OSError as e:
+        print(f"[Rank {local_rank}] 파일 손상 감지됨: {filepath}. 삭제 후 재생성합니다.")
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        return h5py.File(filepath, mode)
 
 
 def main():
@@ -395,14 +409,33 @@ def main():
     final_output_path = os.path.join(output_base_dir, config.output_file)
     
     SAVE_SIZE = 100
-    total_completed = len(global_completed_ids)
-    chunk_idx = total_completed // SAVE_SIZE
-    current_samples = total_completed % SAVE_SIZE
+    local_pattern = f"{final_output_path}_rank{local_rank}_part*.tmp"
+    local_files = glob.glob(local_pattern)
+
+    if not local_files:
+        chunk_idx = 0
+        current_samples = 0
+    else:
+        part_nums = [int(f.split("_part")[-1].split(".tmp")[0]) for f in local_files]
+        chunk_idx = max(part_nums)
+        last_file_path = f"{final_output_path}_rank{local_rank}_part{chunk_idx}.tmp"
+
+        try:
+            with h5py.File(last_file_path, "r") as f:
+                current_samples = len(f.keys())
+        except Exception:
+            current_samples = 0
+        
+        if current_samples >= SAVE_SIZE:
+            chunk_idx += 1
+            current_samples = 0
+
+    print(f"[Rank {local_rank}] Starting processing with chunk index {chunk_idx} and {current_samples} samples.")
     
     def get_tmp_path(rank, c_idx):
         return f"{final_output_path}_rank{rank}_part{c_idx}.tmp"
     temp_output_path = get_tmp_path(local_rank, chunk_idx)
-    h5file = h5py.File(get_tmp_path(local_rank, chunk_idx), "a")
+    h5file = safe_open_h5(temp_output_path, "a")
 
 
     for _split, dataloader in [("train", train_dataloader), ("val", val_dataloader)]:
@@ -412,15 +445,7 @@ def main():
         for batch in iterator:
             batch_ids = [str(idx.item()) for idx in batch["idx"]]
             # Skip already processed batches
-            if all(b_id in h5file for b_id in batch_ids):
-                for _ in batch_ids:
-                    current_samples += 1
-                    if current_samples >= SAVE_SIZE:
-                        h5file.close()
-                        chunk_idx += 1
-                        temp_output_path = get_tmp_path(local_rank, chunk_idx)
-                        h5file = h5py.File(temp_output_path, "a")
-                        current_samples = 0
+            if all(b_id in global_completed_ids for b_id in batch_ids):
                 continue
 
             batch = {k: v.to(local_rank) if hasattr(v, "to") else v for k, v in batch.items()}
@@ -444,7 +469,7 @@ def main():
                     h5file.close()
                     chunk_idx += 1
                     temp_output_path = get_tmp_path(local_rank, chunk_idx)
-                    h5file = h5py.File(temp_output_path, "a")
+                    h5file = safe_open_h5(temp_output_path, "a")
                     current_samples = 0
     if h5file:
         h5file.close()

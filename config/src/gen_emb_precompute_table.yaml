@@ -1,13 +1,15 @@
 data:
+  # name: odqa
+  # data_path: data/train/odqa_train_top100.jsonl
   name: nq
-  data_path: data/nq/retrieved/validation_with_id.jsonl
+  data_path: data/nq/retrieved/validation_top100.jsonl
   
   max_seq_length: 256
   max_ans_length: 32
 
-  batch_size: 2
-  num_workers: 0
-  topk_per_query: 50
+  batch_size: 1
+  num_workers: 8
+  topk_per_query: 10
   test_size: 0.05
   seed: 42
 
@@ -26,9 +28,11 @@ model:
 seed: 42
 debug_mode: False  # Only activate when debugging
 
+
+self_task_prompt_name: base
 generate_prompt_name: base
+base_prompt_name: pure-llm-brief-2
 
 output_dir: /workspaces/kvzip_nlplab/checkpoint
-output_file: nq_val_precompute_table_expanded.h5
 project_name: caformer
 exp_type: multi

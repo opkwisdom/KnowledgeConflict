@@ -11,7 +11,7 @@ import omegaconf.base
 
 from models import MultiHiddenCAFormer, CAFormerGGClassifier, load_model
 from datamodule import GGDataModule
-from lit_modules import GGLightningModule
+from lit_modules import GGLightningModule, AdvancedGGLightningModule
 from utils import setup_logger, load_config
 
 
@@ -54,7 +54,7 @@ def main():
     # Load datamodule & model
     datamodule = GGDataModule(config)
 
-    llm, llm_tokenizer = load_model(config.model.model_name)
+    llm, llm_tokenizer = load_model(config.model.model_name, do_flex=True)
     config.caformer.llm_width = llm.config.hidden_size  # post-init
     caformer = MultiHiddenCAFormer(config.caformer).to(dtype=torch.bfloat16)
     # Load CAFormer weights from the best checkpoint of stage 2
@@ -63,14 +63,17 @@ def main():
 
     config.train.max_interleaving_len = config.data.topk_per_query * (config.data.max_seq_length + config.caformer.query_length) \
                                         + config.data.max_ans_length
-    lightning_module = GGLightningModule(config.train, llm, llm_tokenizer, caformer_clf)
+    # lightning_module = GGLightningModule(config.train, llm, llm_tokenizer, caformer_clf)
+    lightning_module = AdvancedGGLightningModule(config.train, llm, llm_tokenizer, caformer_clf)
 
     # Callbacks
     from_stage2 = "fromST2" if resume else "Scratch"
+    current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     output_dir = os.path.join(config.output_dir,
                               (f"{config.exp_type}_LR={config.train.learning_rate}"
                                f"_{from_stage2}_BS={config.data.batch_size}_AGB={config.train.accumulate_grad_batches}"
-                               f"_Q={config.train.append_question}_ST={config.train.score_transform}_Lamdba={config.train.lmbda}_T={config.train.T}"))
+                               f"_Q={config.train.append_question}_ST={config.train.score_transform}_Lamdba={config.train.lmbda}"
+                               f"_T={config.train.T}_DI={config.train.do_isolate}"))
     checkpoint_callback = ModelCheckpoint(
         monitor='valid/loss',
         dirpath=output_dir,

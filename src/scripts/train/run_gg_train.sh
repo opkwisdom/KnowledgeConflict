@@ -1,10 +1,11 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=0,1,2
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH=$PWD/src:$PYTHONPATH
-
-CONFIG_PATH=$1
+export CUDA_LAUNCH_BLOCKING=1
+export TORCHDYNAMO_VERBOSE=1
+# export TORCH_LOGS="recompiles,graph_breaks"
 
 # Base setting
 python3 src/run_gg_train.py \

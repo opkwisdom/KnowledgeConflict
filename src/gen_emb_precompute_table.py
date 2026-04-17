@@ -12,10 +12,11 @@ import os
 import h5py
 import datetime
 import omegaconf.base
+from typing import Any
 from torch.utils.data import Subset
 
 from models import load_model
-from datamodule import GGDataModule
+from datamodule import GGEmbDataModule
 from utils import setup_logger, load_config
 
 def setup_ddp():
@@ -68,6 +69,7 @@ def prepare_modules(llm: AutoModelForCausalLM):
     llm.gradient_checkpointing_enable()
     llm.eval()
 
+# TODO: Change the logic
 def forward(llm: AutoModelForCausalLM, batch):
         """
         Forward pass to generate LLM hidden states for both documents and CA-Former input.
@@ -99,6 +101,7 @@ def forward(llm: AutoModelForCausalLM, batch):
             llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
         return doc_repr, llm_repr
 
+# TODO: Change the logic
 def compute_oracle_loss_gradients(llm: AutoModelForCausalLM, batch):
         """
         Compute the gradients of the oracle loss.
@@ -125,7 +128,8 @@ def compute_oracle_loss_gradients(llm: AutoModelForCausalLM, batch):
         )[0]    # (B, k * max_seq_length + max_ans_length, D_llm)
         return loss_oracle.detach_(), loss_gradients
 
-def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, doclen_list: torch.Tensor, a_len: torch.Tensor, question_ids: torch.Tensor):
+# TODO: Change the logic
+def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, batch: Any):
     """
     Compute the target scores for CA-Former based on the gradients of the oracle loss.
     Args:
@@ -139,6 +143,10 @@ def compute_oracle_scores(loss_gradients: torch.Tensor, doc_repr: torch.Tensor, 
                        types of oracle scores for that specific batch item.
                        (All tensors are converted to numpy arrays for easier storage)
     """
+    doclen_list = batch["doclen_list"]
+    a_len = batch["a_len"]
+    question_ids = batch["question_ids"]
+
     B = loss_gradients.shape[0]
     K = doc_repr.shape[0] // loss_gradients.shape[0]
     D = doc_repr.shape[-1]
@@ -343,7 +351,7 @@ def main():
 
                 with torch.enable_grad():
                     loss_oracle, loss_gradients = compute_oracle_loss_gradients(llm, batch)
-                    scores_oracle = compute_oracle_scores(loss_gradients, doc_repr, batch["doclen_list"], batch["a_len"], batch["question_ids"])
+                    scores_oracle = compute_oracle_scores(loss_gradients, doc_repr, batch)
                 
                 # Store the gradients in the precompute table
                 for i in range(batch["idx"].shape[0]):

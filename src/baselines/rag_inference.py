@@ -40,30 +40,6 @@ def rerank_contexts(
     _, indices = torch.sort(scores, descending=True)
     reranked_ctxs = [ctxs[idx] for idx in indices]
     return reranked_ctxs
-
-
-# def construct_context(
-#     ctxs: List[CtxExample],
-#     relevance_map: Dict[int, str],
-#     use_single_context: bool = True,
-#     topk: int = -1,
-# ) -> Tuple[str, str]:
-#     if not ctxs:
-#         return ""
-#     elif use_single_context:
-#         target_ctx = ctxs[0]
-#         context = f"Title: {target_ctx.title}\n\n{target_ctx.text}"
-#         return context, relevance_map[0]
-#     else:
-#         contexts = []
-#         if topk > 0:
-#             ctxs = ctxs[:topk]
-#         else:
-#             ctxs = ctxs
-        
-#         for ctx in ctxs:
-#             contexts.append(f"Title: {ctx.title}\n\n{ctx.text}")
-#         return "\n\n".join(contexts), "multiple"
     
 def construct_baseline_context(
     ctxs: List[CtxExample],
@@ -88,60 +64,6 @@ def construct_baseline_context(
         for ctx in ctxs:
             contexts.append(f"Title: {ctx.title}\n\n{ctx.text}")
         return "\n\n".join(contexts)
-
-
-# def run_inference(
-#     config: DictConfig,
-#     model: AutoModelForCausalLM,
-#     tokenizer: AutoTokenizer,
-#     data: List[RelevanceQAExample],
-#     logger,
-# ) -> Dict[str, List[InferenceResult]]:
-#     logger.info("Starting RAG Inference (for Analysis)...")
-#     inference_cases = ["param_true", "param_positive", "param_negative", "param_irrelevant", "param_multiple"]
-#     results = {infer_case: [] for infer_case in inference_cases}
-#     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
-
-#     for idx, item in tqdm(enumerate(data), desc="Running RAG Inference", total=len(data)):
-#         a_internal = item.parametric_answer
-#         # is_correct = has_answer(a_internal, item.answers)
-#         # Case 1 - Internal answer is correct
-#         if is_correct:
-#             sample_result = InferenceResult(
-#                 id=idx,
-#                 question=item.question,
-#                 pred_answer=a_internal,
-#                 answers=item.answers,
-#                 is_correct=is_correct,
-#             )
-#             results["param_true"].append(sample_result)
-#             continue
-#         relevance_map = item.ctx_relevance.mapping
-
-#         context, rel_type = construct_context(item.ctxs, relevance_map, config.data.use_single_context, topk=config.data.topk_per_query)
-#         query_text = generate_prompt.format(question=item.question)
-#         input_text = apply_template(query_text, context, config.model.model_name)
-
-#         input_ids = tokenizer.encode(input_text, return_tensors='pt').to(model.device)
-#         attention_mask = torch.ones_like(input_ids).to(model.device)
-#         outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
-
-#         # Decode generated answer
-#         gen_ids = outputs[:, input_ids.shape[1]:-1]
-#         pred_answer = tokenizer.decode(gen_ids[0])
-
-#         is_correct = has_answer(pred_answer, item.answers)
-        
-#         # Construct result
-#         sample_result = InferenceResult(
-#             id=idx,
-#             question=item.question,
-#             pred_answer=pred_answer,
-#             answers=item.answers,
-#             is_correct=is_correct,
-#         )
-#         results[f"param_{rel_type}"].append(sample_result)
-#     return results
 
 def run_baseline_inference(
     config: DictConfig,
@@ -256,12 +178,7 @@ def main():
     reranker_model = CrossEncoder(RERANKER_MODEL_NAME) if config.data.do_rerank else None
     if reranker_model is not None:
         reranker_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # Inference
-    # if config.run_baseline:
-    #     inference_results = run_baseline_inference(config, model, tokenizer, data, reranker_model, logger)
-    # else:
-    #     inference_results = run_inference(config, model, tokenizer, data, logger)
+    
     inference_results = run_baseline_inference(config, model, tokenizer, data, reranker_model, logger)
     validate_and_save_results(inference_results, config.output_dir, logger)
 

@@ -9,6 +9,7 @@ from typing import Union
 from pytorch_lightning import LightningModule
 from omegaconf import DictConfig
 from transformers import get_linear_schedule_with_warmup, AutoTokenizer, AutoModelForCausalLM
+from torch.nn.attention.flex_attention import create_block_mask
 
 from utils import compute_metrics, parse_reference_answer
 from models import load_model, CAFormerGGClassifier
@@ -16,7 +17,7 @@ from models import load_model, CAFormerGGClassifier
 logger = logging.getLogger(__name__)
 
 
-class GGLightningModule(LightningModule):
+class AdvancedGGLightningModule(LightningModule):
     def __init__(self, cfg: DictConfig,
                  llm: AutoModelForCausalLM, llm_tokenizer: AutoTokenizer, caformer_clf: CAFormerGGClassifier):
         super().__init__()
@@ -40,6 +41,7 @@ class GGLightningModule(LightningModule):
 
         self.val_logits = []
         self.val_labels = []
+        self.compiled_create_block_mask = torch.compile(create_block_mask)
         self.prepare_modules()
 
     def prepare_modules(self):
@@ -59,9 +61,51 @@ class GGLightningModule(LightningModule):
         if hasattr(self.llm.config, "dropout"):
             self.llm.config.dropout = 0.0
 
+        # torch.compile(self.llm.model) is disabled: compiled submodule inside a DDP-wrapped
+        # outer module can cause CUDA device-side asserts due to stream sync issues.
+        # flex_attention already compiles the attention kernel internally via compile_friendly_flex_attention.
+        # if getattr(self.cfg, "do_isolate", False):
+        #     self.llm.model = torch.compile(self.llm.model, dynamic=True)
+
     def train(self, mode: bool = True):
         super().train(mode)
         # self.llm.eval()  # Ensure the base model is always in eval mode
+
+    def convert_document_ids_to_tensor(self, padded_inputs_embeds, doclen_list, query_hidden_states, question_attention_mask):
+        """
+        Convert document lengths and question ids to a tensor of shape (B, L_total)
+        Outputs will be like [0, 0, 1, 1, 1, ..., k, k, -1, -1, ..., -100, -100]
+        Args:
+            doclen_list: Tensor of shape (B, k)
+            query_hidden_states: Tensor of shape (B*k, S, D_llm)
+            question_attention_mask: Tensor of shape (B, q_len)
+        Returns:
+            document_ids_tensor: Tensor of shape (B, L_total)
+        """
+        B, K = doclen_list.shape
+        tgt_len = padded_inputs_embeds.shape[1]
+        query_vec_len = query_hidden_states.shape[1]
+        device = padded_inputs_embeds.device
+
+        document_ids_tensor = torch.full((B, tgt_len), -100, dtype=torch.long, device=device)
+        pos = torch.arange(tgt_len, device=device).unsqueeze(0).expand(B, tgt_len)
+
+        block_lens = doclen_list + query_vec_len
+        end_offsets = torch.cumsum(block_lens, dim=1)  # (B, K)
+        start_offsets = end_offsets - block_lens  # (B, K)
+
+        for j in range(K):
+            start = start_offsets[:, j:j+1] # (B, 1)
+            end = end_offsets[:, j:j+1]   # (B, 1)
+            mask = (pos >= start) & (pos < end)
+            document_ids_tensor = torch.where(mask, j, document_ids_tensor)
+
+        q_start = end_offsets[:, -1:]  # (B, 1)
+        valid_q_len = question_attention_mask.sum(dim=-1, keepdim=True)
+        q_mask = (pos >= q_start) & (pos < q_start + valid_q_len)
+        document_ids_tensor = torch.where(q_mask, -1, document_ids_tensor)
+
+        return document_ids_tensor
 
     def forward(self, batch):
         """
@@ -165,96 +209,263 @@ class GGLightningModule(LightningModule):
         scores_oracle = scores_oracle * self.scaling_factor
         return scores_oracle
     
-    def compute_interleaving_loss(self, target_input_ids, target_attention_mask, query_hidden_states, doclen_list, a_len_list, return_logits=False):
+    def compute_interleaving_loss(self, batch, query_hidden_states, return_logits=False):
         """
         Compute the generation loss conditioned on the interleaving document inputs.
         interleaving document inputs: D_1 + Q_{CA}^{(1)} + ... + D_K + Q_{CA}^{(K)} + Q + A (Teacher-forcing)
         Args:
-            target_input_ids: Tensor of shape (B, L_total)
-            target_attention_mask: Tensor of shape (B, L_total)
+            batch: dict containing the following keys:
+                target_input_ids: Tensor of shape (B, L_total)
+                target_attention_mask: Tensor of shape (B, L_total)
+                doclen_list: Tensor of shape (B, k)
+                a_len: Tensor of shape (B,)
             query_hidden_states: Tensor of shape (B*k, S, D_llm)
-            doclen_list: Tensor of shape (B, k)
-            a_len_list: Tensor of shape (B,)
         Returns:
             gen_loss: scalar tensor
             (Optional) batch_logits: length of B List of Tensor of shape (A, V)
             (Optional) batch_labels: length of B List of Tensor of shape (A,)
         """
+        target_input_ids = batch["target_input_ids"]
+        target_attention_mask = batch["target_attention_mask"]
+        doclen_list = batch["doclen_list"]
+        a_len_list = batch["a_len"]
+        question_attention_mask = batch["question_attention_mask"]
+
         full_repr = self.llm.get_input_embeddings()(target_input_ids)   # (B, L_total, D_llm)
         B, K = doclen_list.shape
-        _, _, D = full_repr.shape
+        S = query_hidden_states.shape[1]
+        D = full_repr.shape[-1]
+        max_len = self.cfg.max_interleaving_len
+        device = full_repr.device
+
+        padded_inputs_embeds = torch.zeros((B, max_len, D), device=device, dtype=full_repr.dtype)
+        padded_target_labels = torch.full((B, max_len), -100, device=device, dtype=torch.long)
+        padded_attention_mask = torch.zeros((B, max_len), device=device, dtype=torch.long)
         
-        input_embeds_list = []
-        effective_len_list = []
-        attention_mask_list = []
-        labels_list = []
-        
+        # Vectorized way
+        block_lens = doclen_list + S
+        cum_block_lens = torch.cumsum(block_lens, dim=1)
+        doc_starts = cum_block_lens - block_lens
+        query_starts = doc_starts + doclen_list
+
         for i in range(B):
-            start_pos = 0
-            sample_input_embeds = []
-            
-            effective_len = int(target_attention_mask[i].sum().item())
-            a_len = int(a_len_list[i].item())
+            orig_ptr = 0
+            sample_doclen_sum = doclen_list[i].sum()
+            e_len = target_attention_mask[i].sum()
+            a_len = a_len_list[i]
             
             for j in range(K):
-                flat_idx = i*K + j
-                doclen = int(doclen_list[i, j].item())
-                end_pos = start_pos + doclen
+                d_len = doclen_list[i, j]
+                d_start = doc_starts[i, j]
+                q_start = query_starts[i, j]
                 
-                sample_input_embeds.append(full_repr[i, start_pos:end_pos])    # (doc_len, D_llm)
-                sample_input_embeds.append(query_hidden_states[flat_idx])    # (S, D_llm)
-                start_pos = end_pos
-            sample_input_embeds.append(full_repr[i, start_pos:effective_len])
-            sample_input_embeds = torch.cat(sample_input_embeds, dim=0)
-            
-            # safe max length
-            if sample_input_embeds.shape[0] > self.cfg.max_interleaving_len:
-                sample_input_embeds = sample_input_embeds[:self.cfg.max_interleaving_len]
-            
-            seq_len = sample_input_embeds.shape[0]
-            target_label = torch.full((seq_len,), -100, dtype=torch.long, device=sample_input_embeds.device)
-            target_ids = target_input_ids[i, effective_len - a_len:effective_len]   # (a_len,)
-            
-            valid_a_len = min(a_len, seq_len)
-            target_label[-valid_a_len:] = target_ids[-valid_a_len:]
-            labels_list.append(target_label)
-            effective_len_list.append(seq_len)
-            input_embeds_list.append(sample_input_embeds)
-            attention_mask_list.append(torch.ones(seq_len, dtype=torch.long, device=sample_input_embeds.device))
+                padded_inputs_embeds[i, d_start:d_start + d_len] = full_repr[i, orig_ptr:orig_ptr + d_len]
+                padded_inputs_embeds[i, q_start:q_start + S] = query_hidden_states[i*K + j]
 
-        # Pad manually
-        padded_inputs_embeds = pad_sequence(input_embeds_list, batch_first=True, padding_value=0.0)
-        padded_inputs_attention_mask = pad_sequence(attention_mask_list, batch_first=True, padding_value=0)
-        padded_target_labels = pad_sequence(labels_list, batch_first=True, padding_value=-100)
+                orig_ptr += d_len
+                
+            qa_start_interleaved = cum_block_lens[i, -1]
+            remaining_len = (e_len - sample_doclen_sum)
+            valid_qa_len = torch.min(remaining_len, max_len - qa_start_interleaved).clamp(min=0)
+
+            padded_inputs_embeds[i, qa_start_interleaved:qa_start_interleaved + valid_qa_len] = \
+                full_repr[i, sample_doclen_sum:sample_doclen_sum + valid_qa_len]
+            
+            total_active_len = qa_start_interleaved + valid_qa_len
+            padded_attention_mask[i, :total_active_len] = 1
+            
+            label_start = (total_active_len - a_len).clamp(min=0)
+            padded_target_labels[i, label_start : total_active_len] = target_input_ids[i, e_len - a_len : e_len]
 
         # Generate logits and compute loss
         # GPU MEMORY BOTTLENECK!! (~13GB for 10 docs)
-        llm_outputs = self.llm(
+        # Document-Isolated Masking
+        if getattr(self.cfg, "do_isolate", False):
+            document_ids = self.convert_document_ids_to_tensor(
+                padded_inputs_embeds, doclen_list, query_hidden_states, question_attention_mask)
+            document_ids = document_ids.to(torch.int32)
+            # document_ids: (B, T), values: j in [0,K-1] (doc+Q_CA blocks), -1 (query), -100 (padding)
+
+            def document_mask_mod(b, h, q_idx, kv_idx) -> bool:
+                causal_mask = q_idx >= kv_idx
+
+                q_id = document_ids[b, q_idx]
+                kv_id = document_ids[b, kv_idx]
+
+                is_identical_doc = q_id == kv_id
+                is_question = q_id == -1
+
+                is_valid = (q_id != -100) & (kv_id != -100)
+                return causal_mask & is_valid & (is_identical_doc | is_question)
+            
+            B, T, _ = padded_inputs_embeds.shape
+            block_masks = self.compiled_create_block_mask(
+                document_mask_mod, B=B, H=None, Q_LEN=T, KV_LEN=T, BLOCK_SIZE=128, device=device)
+            padded_attention_mask = block_masks
+
+            # T_seq = document_ids.shape[1]
+            # pos = torch.arange(T_seq, device=device)
+            # # causal_mask[q, kv] = (q >= kv)
+            # causal_mask = (pos.unsqueeze(1) >= pos.unsqueeze(0)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+
+            # q_doc = document_ids.unsqueeze(2)   # (B, T, 1)
+            # kv_doc = document_ids.unsqueeze(1)  # (B, 1, T)
+            # is_same_doc = (q_doc == kv_doc)                          # (B, T, T)
+            # is_question = (q_doc == -1)                              # (B, T, T)
+            # is_valid = (q_doc != -100) & (kv_doc != -100)           # (B, T, T)
+            # doc_mask = (is_valid & (is_same_doc | is_question)).unsqueeze(1)  # (B, 1, T, T)
+
+            # bool_mask = (causal_mask & doc_mask)         # (B, 1, T, T) bool
+            # dtype = full_repr.dtype
+            # min_val = torch.finfo(dtype).min
+
+            # padded_attention_mask = torch.zeros_like(bool_mask, dtype=dtype)
+            # padded_attention_mask.masked_fill_(~bool_mask, min_val)
+
+        outputs = self.llm.model(
             inputs_embeds=padded_inputs_embeds,
-            attention_mask=padded_inputs_attention_mask,
-            labels=padded_target_labels
+            attention_mask=padded_attention_mask,
+            use_cache=False,
         )
-        gen_loss = llm_outputs.loss
+        hidden_states = outputs.last_hidden_state  # (B, L_total, D_llm)
+
+        shift_hidden = hidden_states[:, :-1, :].contiguous()
+        shift_labels = padded_target_labels[:, 1:].contiguous()
+
+        mask = shift_labels != -100
+        valid_hidden = shift_hidden[mask]   # (a_len, D)
+        valid_labels = shift_labels[mask]   # (a_len,)
+
+        ans_logits = self.llm.lm_head(valid_hidden)   # (a_len, V)
+        gen_loss = self.gen_loss_fn(ans_logits, valid_labels)
+
+        batch_logits, batch_labels = [], []
+        if return_logits:
+            all_preds = ans_logits.argmax(dim=-1).detach().cpu()
+            all_labels = valid_labels.detach().cpu()
+            curr = 0
+            for i in range(B):
+                length = int(a_len_list[i].item())
+                batch_logits.append(all_preds[curr:curr + length])
+                batch_labels.append(all_labels[curr:curr + length])
+                curr += length
 
         outputs = (gen_loss,)
         if return_logits:
-            logits = llm_outputs.logits.detach().cpu()
-            target_labels = padded_target_labels.detach().cpu()
-            
-            batch_logits = []
-            batch_labels = []
-            for i, (effective_len, a_len) in enumerate(zip(effective_len_list, a_len_list)):
-                start_pos = effective_len - a_len
-                end_pos = effective_len
-                # Consider NTP
-                sample_logits = logits[i, start_pos-1:end_pos-1, :]
-                sample_labels = target_labels[i, start_pos:end_pos]
-                sample_preds = sample_logits.argmax(dim=-1)
-                batch_logits.append(sample_preds.detach().cpu())
-                batch_labels.append(sample_labels.detach().cpu())
-            # Add as result
             outputs += (batch_logits, batch_labels)
+        
         return outputs
+    
+    # def compute_interleaving_loss(self, batch, query_hidden_states, return_logits=False):
+    #     """
+    #     Compute the generation loss conditioned on the interleaving document inputs.
+    #     interleaving document inputs: D_1 + Q_{CA}^{(1)} + ... + D_K + Q_{CA}^{(K)} + Q + A (Teacher-forcing)
+    #     Args:
+    #         batch: dict containing the following keys:
+    #             target_input_ids: Tensor of shape (B, L_total)
+    #             target_attention_mask: Tensor of shape (B, L_total)
+    #             doclen_list: Tensor of shape (B, k)
+    #             a_len: Tensor of shape (B,)
+    #         query_hidden_states: Tensor of shape (B*k, S, D_llm)
+    #     Returns:
+    #         gen_loss: scalar tensor
+    #         (Optional) batch_logits: length of B List of Tensor of shape (A, V)
+    #         (Optional) batch_labels: length of B List of Tensor of shape (A,)
+    #     """
+    #     target_input_ids = batch["target_input_ids"]
+    #     target_attention_mask = batch["target_attention_mask"]
+    #     doclen_list = batch["doclen_list"]
+    #     a_len_list = batch["a_len"]
+    #     question_attention_mask = batch["question_attention_mask"]
+
+    #     full_repr = self.llm.get_input_embeddings()(target_input_ids)   # (B, L_total, D_llm)
+    #     B, K = doclen_list.shape
+    #     _, _, D = full_repr.shape
+        
+    #     input_embeds_list = []
+    #     attention_mask_list = []
+    #     labels_list = []
+        
+    #     for i in range(B):
+    #         start_pos = 0
+    #         sample_input_embeds = []
+            
+    #         effective_len = int(target_attention_mask[i].sum().item())
+    #         a_len = int(a_len_list[i].item())
+            
+    #         for j in range(K):
+    #             flat_idx = i*K + j
+    #             doclen = int(doclen_list[i, j].item())
+    #             end_pos = start_pos + doclen
+                
+    #             sample_input_embeds.append(full_repr[i, start_pos:end_pos])    # (doc_len, D_llm)
+    #             sample_input_embeds.append(query_hidden_states[flat_idx])    # (S, D_llm)
+    #             start_pos = end_pos
+    #         sample_input_embeds.append(full_repr[i, start_pos:effective_len])
+    #         sample_input_embeds = torch.cat(sample_input_embeds, dim=0)
+            
+    #         # safe max length
+    #         if sample_input_embeds.shape[0] > self.cfg.max_interleaving_len:
+    #             sample_input_embeds = sample_input_embeds[:self.cfg.max_interleaving_len]
+            
+    #         seq_len = sample_input_embeds.shape[0]
+    #         target_label = torch.full((seq_len,), -100, dtype=torch.long, device=sample_input_embeds.device)
+    #         target_ids = target_input_ids[i, effective_len - a_len:effective_len]   # (a_len,)
+            
+    #         valid_a_len = min(a_len, seq_len)
+    #         target_label[-valid_a_len:] = target_ids[-valid_a_len:]
+    #         labels_list.append(target_label)
+    #         input_embeds_list.append(sample_input_embeds)
+    #         attention_mask_list.append(torch.ones(seq_len, dtype=torch.long, device=sample_input_embeds.device))
+
+    #     # Pad manually
+    #     padded_inputs_embeds = pad_sequence(input_embeds_list, batch_first=True, padding_value=0.0)
+    #     padded_inputs_attention_mask = pad_sequence(attention_mask_list, batch_first=True, padding_value=0)
+    #     padded_target_labels = pad_sequence(labels_list, batch_first=True, padding_value=-100)
+
+    #     # Generate logits and compute loss
+    #     # GPU MEMORY BOTTLENECK!! (~13GB for 10 docs)
+    #     # TODO: Document-Isolated Masking
+    #     batch_logits = []
+    #     batch_labels = []
+    #     added_kwargs = {}
+    #     if getattr(self.cfg, "do_isolate", False):
+    #         added_kwargs["document_ids"] = self.convert_document_ids_to_tensor(
+    #             padded_inputs_embeds, doclen_list, query_hidden_states, question_attention_mask)
+
+    #     outputs = self.llm.model(
+    #         inputs_embeds=padded_inputs_embeds,
+    #         attention_mask=padded_inputs_attention_mask,
+    #         use_cache=False,
+    #         **added_kwargs  # This is for custom attention masking
+    #     )
+    #     hidden_states = outputs.last_hidden_state  # (B, L_total, D_llm)
+
+    #     gen_loss = 0.0
+    #     for i in range(B):
+    #         a_len = int(a_len_list[i].item())
+    #         effective_len = int(padded_inputs_attention_mask[i].sum().item())
+    #         start_pos = effective_len - a_len
+    #         end_pos = effective_len
+
+    #         ans_hidden = hidden_states[i, start_pos-1:end_pos-1]    # (a_len, D_llm)
+    #         ans_labels = padded_target_labels[i, start_pos:end_pos]
+
+    #         ans_logits = self.llm.lm_head(ans_hidden)   # (a_len, V)
+    #         sample_loss = self.gen_loss_fn(ans_logits, ans_labels)
+
+    #         if return_logits:
+    #             batch_logits.append(ans_logits.argmax(dim=-1).detach().cpu())
+    #             batch_labels.append(ans_labels.detach().cpu())
+
+    #         gen_loss += sample_loss
+    #     gen_loss = gen_loss / B
+
+    #     outputs = (gen_loss,)
+    #     if return_logits:
+    #         outputs += (batch_logits, batch_labels)
+        
+    #     return outputs
     
     def transform_scores_oracle(self, scores_oracle):
         if self.cfg.score_transform is None:
@@ -290,13 +501,7 @@ class GGLightningModule(LightningModule):
         scores_oracle = scores_oracle.view(-1)
         guide_loss = self.guide_loss_fn(scores_hat, scores_oracle)
         # Generation loss
-        gen_loss = self.compute_interleaving_loss(
-            batch["target_input_ids"],
-            batch["target_attention_mask"],
-            query_hidden_states,
-            batch["doclen_list"],
-            batch["a_len"]
-        )[0]
+        gen_loss = self.compute_interleaving_loss(batch, query_hidden_states)[0]
         loss = self.lmbda * guide_loss + gen_loss
         
         if not use_precompute_table:
@@ -333,14 +538,7 @@ class GGLightningModule(LightningModule):
         scores_oracle = scores_oracle.view(-1)
         guide_loss = self.guide_loss_fn(scores_hat, scores_oracle)
         # Generation loss
-        gen_loss, batch_logits, batch_labels = self.compute_interleaving_loss(
-            batch["target_input_ids"],
-            batch["target_attention_mask"],
-            query_hidden_states,
-            batch["doclen_list"],
-            batch["a_len"],
-            return_logits=True
-        )
+        gen_loss, batch_logits, batch_labels = self.compute_interleaving_loss(batch, query_hidden_states, return_logits=True)
         loss = self.lmbda * guide_loss + gen_loss
         
         self.val_logits.extend(batch_logits)
