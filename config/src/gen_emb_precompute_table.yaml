@@ -1,20 +1,24 @@
 data:
   # name: odqa
   # data_path: data/train/odqa_train_top100.jsonl
-  name: nq
-  data_path: data/nq/retrieved/validation_top100.jsonl
-  
+  # name: nq
+  # data_path: data/nq/retrieved/validation_top100_with_id.jsonl
+  name: hotpotqa-w
+  # data_path: data/hotpotqa-d/retrieved/validation_top100.jsonl
+  data_path: data/hotpotqa-w/retrieved/validation_1000r_top100.jsonl
+
   max_seq_length: 256
   max_ans_length: 32
 
-  batch_size: 1
+  batch_size: 4
   num_workers: 8
-  topk_per_query: 10
+  topk_per_query: 100
   test_size: 0.05
   seed: 42
 
   use_precompute_table: False
   precompute_table_path: None
+
 
 model:
   model_name: meta-llama/Meta-Llama-3-8B-Instruct
@@ -27,11 +31,9 @@ model:
 
 seed: 42
 debug_mode: False  # Only activate when debugging
+oracle_mode: base
 
-
-self_task_prompt_name: base
 generate_prompt_name: base
-base_prompt_name: pure-llm-brief-2
 
 output_dir: /workspaces/kvzip_nlplab/checkpoint
 project_name: caformer

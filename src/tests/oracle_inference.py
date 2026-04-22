@@ -20,23 +20,33 @@ from src.prompt import GENERATE_PROMPT
 
 
 def rerank_contexts(
-    idx: int,
+    query_id: str,
     ctxs: List[CtxExample],
     precompute_table: dict,
-    score_mode: str = "marginal-qa"
+    score_mode: str = "marginal-qa",
+    min_k: int = 3,
+    threshold: float = 0.0
 ) -> List[CtxExample]:
-    rerank_indices = np.argsort(precompute_table[str(idx)][score_mode][:])[::-1]
-    rerank_ctxs = [ctxs[i] for i in rerank_indices]
-    return rerank_ctxs
+    # query_id = str(idx)
+    if query_id not in precompute_table:
+        return ctxs[:min_k]
+
+    scores = precompute_table[query_id][score_mode][:]
+    rerank_indices = np.argsort(scores)[::-1]
+    supportive_indices = [i for i in rerank_indices if scores[i] > threshold]
+    if not supportive_indices:
+        return ctxs[:min_k]
+
+    return [ctxs[i] for i in supportive_indices]
 
 def construct_context(
-    idx: int,
+    idx: str,
     ctxs: List[CtxExample],
     use_single_context: bool = False,
     topk: int = -1,
     do_rerank: bool = True,
     precompute_table: dict = None,
-    score_mode: str = "marginal-qa"
+    score_mode: str = "oracle"
 ) -> str:
     if use_single_context:
         target_ctx = ctxs[0]
@@ -65,8 +75,9 @@ def run_inference(
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     for idx, item in tqdm(enumerate(data), desc="Inference Progress", total=len(data)):
+        query_id = item.idx
         context = construct_context(
-            idx,
+            query_id,
             item.ctxs,
             config.data.use_single_context,
             topk=config.data.topk_per_query,
@@ -82,8 +93,8 @@ def run_inference(
         outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
 
         # Decode generated answer
-        gen_ids = outputs[:, input_ids.shape[1]:-1]
-        pred_answer = tokenizer.decode(gen_ids[0])
+        gen_ids = outputs[:, input_ids.shape[1]:]
+        pred_answer = tokenizer.decode(gen_ids[0], skip_special_tokens=True)
 
         answers = item.answers
         metrics = compute_metrics(pred_answer, answers)
@@ -165,6 +176,8 @@ def main():
     tokenizer.pad_token_id = 128004
     tokenizer.padding_side = "left"
     model.to('cuda' if torch.cuda.is_available() else 'cpu')
+    # model = None
+    # tokenizer = None
     logger.info(f"Model {config.model.model_name} initialized.")
 
     # Inference

@@ -7,6 +7,7 @@ from datasets import load_dataset, DatasetDict
 
 from .metric_utils import MetricResult
 
+JsonType = Dict[str, Any]
 
 ### Base QA Example Dataclasses
 @dataclass
@@ -23,8 +24,8 @@ class QAExample:
     question: str
     answers: List[str]
     num_answer: int
-    # name: str
-    parametric_answer: Optional[str] = None
+    name: str
+    pseudo_answer: Optional[str] = None
     ans_type: Optional[str] = None
     idx: int = None
     ctxs: List[CtxExample] = field(default_factory=list)

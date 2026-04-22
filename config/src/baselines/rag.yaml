@@ -1,6 +1,8 @@
 data:
-  name: nq
-  data_path: data/nq/retrieved/validation_top100.jsonl
+  # name: nq
+  # data_path: data/nq/retrieved/validation_top100.jsonl
+  name: hotpotqa-w
+  data_path: data/hotpotqa-w/retrieved/validation_1000r_top100.jsonl
   max_seq_length: 1024
   use_single_context: False
 

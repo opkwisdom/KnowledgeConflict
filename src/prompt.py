@@ -52,6 +52,19 @@ GENERATE_PROMPT = {
         "Answer the following question based on your internal knowledge with one or few words.\n"
         "Question: {question}\n"
         "Answer: "
+    ),
+    "pseudo_answer": (
+        "You are an expert logical reasoning agent. "
+        "Given a question, the exact supporting facts, and the final short answer, "
+        "write a concise, step-by-step explanatory paragraph (3 to 4 sentences).\n\n"
+        "Your goal is to explicitly connect the entities in the supporting facts to logically derive the final answer.\n\n"
+        "### Output Formulation\n"
+        "Write a single, coherent paragraph. STRICTLY 3 to 4 sentences. Do not exceed this limit.\n"
+        "### Input\n"
+        "- Question: {question}\n"
+        "- Supporting Facts:\n{supporting_facts}\n"
+        "- Final Short Answer: {final_short_answer}\n\n"
+        "Answer: "
     )
 }
 

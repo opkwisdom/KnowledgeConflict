@@ -316,7 +316,7 @@ def get_filtered_subset(dataset, completed_ids, is_main_process=False):
                 
     return Subset(dataset, valid_indices)
 
-def safe_open_h5(filepath, mode="a"):
+def safe_open_h5(local_rank, filepath, mode="a"):
     try:
         return h5py.File(filepath, mode)
     except OSError as e:

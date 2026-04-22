@@ -4,6 +4,7 @@ import json
 import os
 from datasets import load_dataset, DatasetDict
 
+JsonType = Dict[str, Any]
 
 ### Base QA Example Dataclasses
 @dataclass

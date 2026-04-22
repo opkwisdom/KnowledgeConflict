@@ -61,12 +61,6 @@ class AdvancedGGLightningModule(LightningModule):
         if hasattr(self.llm.config, "dropout"):
             self.llm.config.dropout = 0.0
 
-        # torch.compile(self.llm.model) is disabled: compiled submodule inside a DDP-wrapped
-        # outer module can cause CUDA device-side asserts due to stream sync issues.
-        # flex_attention already compiles the attention kernel internally via compile_friendly_flex_attention.
-        # if getattr(self.cfg, "do_isolate", False):
-        #     self.llm.model = torch.compile(self.llm.model, dynamic=True)
-
     def train(self, mode: bool = True):
         super().train(mode)
         # self.llm.eval()  # Ensure the base model is always in eval mode
@@ -279,49 +273,6 @@ class AdvancedGGLightningModule(LightningModule):
 
         # Generate logits and compute loss
         # GPU MEMORY BOTTLENECK!! (~13GB for 10 docs)
-        # Document-Isolated Masking
-        if getattr(self.cfg, "do_isolate", False):
-            document_ids = self.convert_document_ids_to_tensor(
-                padded_inputs_embeds, doclen_list, query_hidden_states, question_attention_mask)
-            document_ids = document_ids.to(torch.int32)
-            # document_ids: (B, T), values: j in [0,K-1] (doc+Q_CA blocks), -1 (query), -100 (padding)
-
-            def document_mask_mod(b, h, q_idx, kv_idx) -> bool:
-                causal_mask = q_idx >= kv_idx
-
-                q_id = document_ids[b, q_idx]
-                kv_id = document_ids[b, kv_idx]
-
-                is_identical_doc = q_id == kv_id
-                is_question = q_id == -1
-
-                is_valid = (q_id != -100) & (kv_id != -100)
-                return causal_mask & is_valid & (is_identical_doc | is_question)
-            
-            B, T, _ = padded_inputs_embeds.shape
-            block_masks = self.compiled_create_block_mask(
-                document_mask_mod, B=B, H=None, Q_LEN=T, KV_LEN=T, BLOCK_SIZE=128, device=device)
-            padded_attention_mask = block_masks
-
-            # T_seq = document_ids.shape[1]
-            # pos = torch.arange(T_seq, device=device)
-            # # causal_mask[q, kv] = (q >= kv)
-            # causal_mask = (pos.unsqueeze(1) >= pos.unsqueeze(0)).unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
-
-            # q_doc = document_ids.unsqueeze(2)   # (B, T, 1)
-            # kv_doc = document_ids.unsqueeze(1)  # (B, 1, T)
-            # is_same_doc = (q_doc == kv_doc)                          # (B, T, T)
-            # is_question = (q_doc == -1)                              # (B, T, T)
-            # is_valid = (q_doc != -100) & (kv_doc != -100)           # (B, T, T)
-            # doc_mask = (is_valid & (is_same_doc | is_question)).unsqueeze(1)  # (B, 1, T, T)
-
-            # bool_mask = (causal_mask & doc_mask)         # (B, 1, T, T) bool
-            # dtype = full_repr.dtype
-            # min_val = torch.finfo(dtype).min
-
-            # padded_attention_mask = torch.zeros_like(bool_mask, dtype=dtype)
-            # padded_attention_mask.masked_fill_(~bool_mask, min_val)
-
         outputs = self.llm.model(
             inputs_embeds=padded_inputs_embeds,
             attention_mask=padded_attention_mask,
