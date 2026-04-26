@@ -92,3 +92,26 @@ class CosSimRegLoss(torch.nn.Module):
         sim_matrix = sim_matrix.masked_fill(mask, 0.0)
         mean_sim = sim_matrix.sum() / (B * K * (K - 1))
         return mean_sim
+    
+    
+class RankwiseGuideLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, input_scores: torch.FloatTensor, target_scores: torch.FloatTensor):
+        """
+        Args:
+            input: Tensor of shape (B, K)
+            target: Tensor of shape (B, K)
+        Returns:
+            loss: Scalar tensor representing the rankwise score loss
+        """
+        B, K = input_scores.shape
+        input_diff = input_scores.unsqueeze(2) - input_scores.unsqueeze(1)  # (B, K, K)
+        target_diff = target_scores.unsqueeze(2) - target_scores.unsqueeze(1)  # (B, K, K)
+        right_term = torch.abs(target_diff) - torch.sign(target_diff) * input_diff
+        rank_matrix = F.relu(right_term)
+        denominator = K * (K - 1) if K > 1 else 1
+        batch_loss = rank_matrix.sum(dim=(1, 2)) * denominator
+        loss = batch_loss.mean()
+        return loss

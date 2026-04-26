@@ -111,7 +111,7 @@ class InferenceResult:
 def load_qa_dataset(data_path: str) -> List[QAExample]:
     dataset = []
     with open(data_path, 'r') as f:
-        for line in f:
+        for line in tqdm(f, desc="Loading QA dataset"):
             item = json.loads(line)
             dataset.append(QAExample.from_dict(item))
     return dataset

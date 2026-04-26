@@ -47,6 +47,50 @@ def plot_genloss(data_list, output_path):
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
+    
+def plot_genloss_diff(data_list, output_path):
+    sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
+    plt.figure(figsize=(10, 6))
+
+    n_samples = len(data_list)
+    rows = []
+    for item in data_list:
+        base_loss = 0.0
+        if "base_loss" in item and item["base_loss"]:
+            base_loss = item["base_loss"][0]
+        
+        if "gold_loss" in item and item["gold_loss"]:
+            for g_loss in item["gold_loss"]:
+                rows.append({"Context Type": "Gold (True Target)", "Loss": g_loss - base_loss})
+            
+        if "neg_loss" in item and item["neg_loss"]:
+            for n_loss in item["neg_loss"]:
+                rows.append({"Context Type": "Neg (Distractor)", "Loss": n_loss - base_loss})
+    
+    df = pd.DataFrame(rows)
+    category_order = [
+        "Neg (Distractor)", 
+        "Gold (True Target)"
+    ]
+    ax = sns.boxplot(
+        x="Context Type",
+        y="Loss",
+        data=df,
+        width=0.5,
+        order=category_order,
+        palette=["#e74c3c", "#2ecc71"],
+        showfliers=True,
+        fliersize=3
+    )
+    plt.title(f"Generation Margin Loss Comparison by Context Type ({n_samples})", pad=15, fontweight="bold")
+    plt.ylabel("Generation Margin Loss (Lower is Better)", labelpad=10)
+    plt.xlabel("")
+
+    sns.despine()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+    
 
 def calculate_and_save_ranking_stats(data_list, output_meta_path):
     gold_ranks, base_ranks = [], []
@@ -109,11 +153,14 @@ def main():
         if not do_vllm else f"src/tests/oracle_loss/{test_type}_vllm_genloss_plot.png"
     output_meta_path = f"src/tests/oracle_loss/{test_type}_ranking_stats.txt" \
         if not do_vllm else f"src/tests/oracle_loss/{test_type}_vllm_ranking_stats.txt"
+    output_margin_path = f"src/tests/oracle_loss/{test_type}_margin_plot.png" \
+        if not do_vllm else f"src/tests/oracle_loss/{test_type}_vllm_margin_plot.png"
 
     with open(input_path, "r") as f:
         data = json.load(f)
 
     plot_genloss(data, output_path)
+    plot_genloss_diff(data, output_margin_path)
     calculate_and_save_ranking_stats(data, output_meta_path)
 
 if __name__ == "__main__":

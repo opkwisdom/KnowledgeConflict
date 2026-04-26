@@ -2,6 +2,7 @@ from torch.utils.data import Dataset, DataLoader
 from datasets import Dataset as HFDataset   # Prevent OOM
 from typing import List, Optional
 from tqdm import tqdm
+from torch.nn.utils.rnn import pad_sequence
 from omegaconf import DictConfig
 from pytorch_lightning import LightningDataModule
 from transformers import AutoTokenizer
@@ -11,7 +12,7 @@ import torch
 import torch.nn.functional as F
 import h5py
 
-from utils import load_relevance_dataset, format_reference_answer, RelevanceQAExample
+from utils import load_qa_dataset, format_reference_answer, RelevanceQAExample
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,11 @@ class GGDataset(Dataset):
         item = RelevanceQAExample.from_dict(self.data[idx])
         question = item.question
         # reference answer will be used for loss calculation
-        ref_answer = format_reference_answer(item.answers)
+        # use pseudo answer? richer signal for CA-Former?
+        if self.cfg.data.use_pseudo_answer:
+            ref_answer = item.pseudo_answer
+        else:
+            ref_answer = format_reference_answer(item.answers)
 
         answer_inputs = self.llm_tokenizer(
             ref_answer,
@@ -74,8 +79,8 @@ class GGDataset(Dataset):
         doclen_list = []
         doc_input_ids = []
         source_input_ids = []
-        target_input_ids = []
-        for ctx in item.ctxs:
+        ctxs = item.ctxs[:100]  # Only use 100 contexts
+        for ctx in ctxs:
             ctx_text = f"Title: {ctx.title}\n\n{ctx.text}"
             tokenized_ctx = self.llm_tokenizer(
                 ctx_text,
@@ -85,15 +90,13 @@ class GGDataset(Dataset):
                 add_special_tokens=False
             )
             
-            doc_input_ids.append(torch.cat([tokenized_ctx["input_ids"], torch.tensor([[self.llm_tokenizer.eos_token_id]])], dim=1).squeeze(0))
-            source_input_ids.append(torch.cat([tokenized_ctx["input_ids"], question_inputs["input_ids"]], dim=1).squeeze(0))
-            target_input_ids.append(tokenized_ctx["input_ids"].squeeze(0))
+            doc_input = torch.cat([tokenized_ctx["input_ids"], torch.tensor([[self.llm_tokenizer.eos_token_id]])], dim=1)
+            source_input = torch.cat([tokenized_ctx["input_ids"], question_inputs["input_ids"]], dim=1)
+            
+            doc_input_ids.append(doc_input.squeeze(0))
+            source_input_ids.append(source_input.squeeze(0))
             doclen_list.append(tokenized_ctx["input_ids"].shape[1])
-
-        # Concate D1 + ... + Dk + Q + A as target input
-        target_input_ids = torch.cat(target_input_ids, dim=0)
-        target_input_ids = torch.cat([target_input_ids, question_inputs["input_ids"][0], answer_inputs["input_ids"][0]], dim=0)
-
+        
         scores_oracle = None
         if self.use_precompute_table:
             scores_oracle = self.oracle_cache[str(item.idx)]
@@ -102,11 +105,13 @@ class GGDataset(Dataset):
             "idx": item.idx,
             "doc_input_ids": doc_input_ids,                  # (k, max_seq_length)
             "source_input_ids": source_input_ids,             # (k, max_seq_length)
-            "target_input_ids": target_input_ids,                          # (k * max_seq_length + max_ans_length,)
             "doclen_list": doclen_list,                       # (k,)
             "a_len": a_len,                                   # (1,)   
-            "question_ids": roberta_question_inputs["input_ids"].squeeze(0),                # (q_len,)
-            "question_attention_mask": roberta_question_inputs["attention_mask"].squeeze(0),  # (q_len,)
+            "q_len": q_len,
+            "answer_ids": answer_inputs["input_ids"].squeeze(0),                # (a_len,)
+            "question_ids": question_inputs["input_ids"].squeeze(0),                # (q_len,)
+            "roberta_question_ids": roberta_question_inputs["input_ids"].squeeze(0),                # (roberta_q_len,)
+            "roberta_question_mask": roberta_question_inputs["attention_mask"].squeeze(0),  # (roberta_q_len,)
             "scores_oracle": scores_oracle,  # (k,) or None
         }
 
@@ -120,19 +125,21 @@ class GGDataModule(LightningDataModule):
         self.batch_size = self.data_cfg.batch_size
         self.num_workers = self.data_cfg.num_workers
         self.pad_token_id = 128004
+        self.roberta_pad_token_id = 1
 
     def setup(self, stage: Optional[str] = None):
-        full_data = load_relevance_dataset(self.data_cfg.data_path)
+        full_data = load_qa_dataset(self.data_cfg.data_path)
         if self.cfg.debug_mode:
             full_data = full_data[:5000]
             
         self.oracle_cache = {}
         if self.data_cfg.use_precompute_table:
-            score_mode = getattr(self.cfg.train, "oracle_mode", "marginal")
             logger.info("Loading pre-compute table entirely into RAM...")
             with h5py.File(self.data_cfg.precompute_table_path, "r") as f:
                 for key in f.keys():
-                    self.oracle_cache[key] = torch.tensor(f[key][score_mode][:], dtype=torch.bfloat16)
+                    # self.oracle_cache[key] = torch.tensor(f[key][score_mode][:], dtype=torch.bfloat16)
+                    oracle_scores = f[key]['base_loss'][:] - f[key]['doc_loss'][:]
+                    self.oracle_cache[key] = torch.tensor(oracle_scores[:100], dtype=torch.bfloat16)
             
         dataset = [asdict(item) for item in tqdm(full_data, desc="Converts to dict")]
         hf_dataset = HFDataset.from_list(dataset)
@@ -144,140 +151,143 @@ class GGDataModule(LightningDataModule):
             self.val_dataset = GGDataset(split_dataset["test"], self.oracle_cache, self.cfg)
         else:
             raise ValueError(f"Unknown stage: {stage}")
-        
+
     def collate_fn(self, batch):
         """
         Collate function to combine multiple docs into a single batch.
         """
         B = len(batch)
         K = len(batch[0]["doc_input_ids"])
-
-        max_doc_len = max(len(d) for item in batch for d in item["doc_input_ids"])
-        max_source_len = max(len(s) for item in batch for s in item["source_input_ids"])
-        max_tgt_len = max(len(item["target_input_ids"]) for item in batch)
-        max_q_len = max(len(item["question_ids"]) for item in batch)
         
-        flat_doc_ids = torch.full((B * K, max_doc_len), self.pad_token_id, dtype=torch.long)
-        flat_doc_mask = torch.zeros((B * K, max_doc_len), dtype=torch.long)
-        flat_source_ids = torch.full((B * K, max_source_len), self.pad_token_id, dtype=torch.long)
-        flat_source_mask = torch.zeros((B * K, max_source_len), dtype=torch.long)
-    
-        padded_target_ids = torch.full((B, max_tgt_len), self.pad_token_id, dtype=torch.long)
-        padded_target_mask = torch.zeros((B, max_tgt_len), dtype=torch.long)
-        target_labels = torch.full((B, max_tgt_len), -100, dtype=torch.long)
+        flat_doc_ids_list = []
+        flat_source_ids_list = []
+        roberta_q_ids_list = []
 
-        padded_question_ids = torch.full((B, max_q_len), 1, dtype=torch.long)  # 1 = RoBERTa pad_token_id
-        padded_question_mask = torch.zeros((B, max_q_len), dtype=torch.long)
+        doc_lens = []
+        source_lens = []
+        roberta_q_lens = []
 
-        for i, item in enumerate(batch):
-            q_ids = item["question_ids"]
-            q_len = len(q_ids)
-            padded_question_ids[i, :q_len] = q_ids
-            padded_question_mask[i, :q_len] = 1
-            a_len = int(item["a_len"].item() if isinstance(item["a_len"], torch.Tensor) else item["a_len"])
-
-            # ----- Target -----
-            t_ids = item["target_input_ids"]
-            t_len = len(t_ids)
-            padded_target_ids[i, :t_len] = t_ids
-            padded_target_mask[i, :t_len] = 1
-
-            valid_a_len = min(a_len, t_len)
-            target_labels[i, t_len - valid_a_len : t_len] = padded_target_ids[i, t_len - valid_a_len : t_len]
+        for item in batch:
+            # ----- Question -----
+            r_q_ids = torch.tensor(item["roberta_question_ids"], dtype=torch.long)
+            roberta_q_ids_list.append(r_q_ids)
+            roberta_q_lens.append(len(r_q_ids))
 
             # ----- Doc & Src -----
             for j in range(K):
-                idx = i*K + j
+                d_ids = torch.tensor(item["doc_input_ids"][j], dtype=torch.long)
+                s_ids = torch.tensor(item["source_input_ids"][j], dtype=torch.long)
+                
+                flat_doc_ids_list.append(d_ids)
+                flat_source_ids_list.append(s_ids)
+                
+                doc_lens.append(len(d_ids))
+                source_lens.append(len(s_ids))
 
-                # Doc
-                d_ids = item["doc_input_ids"][j]
-                d_len = len(d_ids)
-                flat_doc_ids[idx, :d_len] = d_ids
-                flat_doc_mask[idx, :d_len] = 1
+        # Utilize C++ backends
+        flat_doc_ids = pad_sequence(flat_doc_ids_list, batch_first=True, padding_value=self.pad_token_id)
+        flat_source_ids = pad_sequence(flat_source_ids_list, batch_first=True, padding_value=self.pad_token_id)
+        padded_roberta_question_ids = pad_sequence(roberta_q_ids_list, batch_first=True, padding_value=self.roberta_pad_token_id)
 
-                # Source
-                s_ids = item["source_input_ids"][j]
-                s_len = len(s_ids)
-                flat_source_ids[idx, :s_len] = s_ids
-                flat_source_mask[idx, :s_len] = 1
+        max_doc_len = flat_doc_ids.shape[1]
+        max_source_len = flat_source_ids.shape[1]
+        max_roberta_q_len = padded_roberta_question_ids.shape[1]
+
+        doc_lens_tensor = torch.tensor(doc_lens)
+        source_lens_tensor = torch.tensor(source_lens)
+        roberta_q_lens_tensor = torch.tensor(roberta_q_lens)
+
+        flat_doc_mask = (torch.arange(max_doc_len).unsqueeze(0) < doc_lens_tensor.unsqueeze(1)).long()
+        flat_source_mask = (torch.arange(max_source_len).unsqueeze(0) < source_lens_tensor.unsqueeze(1)).long()
+        padded_roberta_question_mask = (torch.arange(max_roberta_q_len).unsqueeze(0) < roberta_q_lens_tensor.unsqueeze(1)).long()
 
         use_scores_oracle = batch[0]["scores_oracle"] is not None
 
         return {
-            "idx": torch.tensor([item['idx'] for item in batch]),    # (B,)
-            "doc_input_ids": flat_doc_ids,                   # (B * K, max_doc_len)
-            "doc_attention_mask": flat_doc_mask,             # (B * K, max_doc_len)
-            "source_input_ids": flat_source_ids,             # (B * K, max_source_len)
-            "source_attention_mask": flat_source_mask,       # (B * K, max_source_len)
-            "target_input_ids": padded_target_ids,           # (B, max_tgt_len)
-            "target_attention_mask": padded_target_mask,     # (B, max_tgt_len)
-            "doclen_list": torch.tensor([item["doclen_list"] for item in batch]),                  # (B, K)
-            "a_len": torch.tensor([item["a_len"] for item in batch]),                              # (B,)
-            "question_ids": padded_question_ids,                 # (B, q_len)
-            "question_attention_mask": padded_question_mask,     # (B, q_len)
-            "scores_oracle": torch.stack([item["scores_oracle"] for item in batch]) if use_scores_oracle else None,  # (B, K) or None
+            "idx": [item['idx'] for item in batch],
+            # Document input to be combined in gen loss
+            "doc_input_ids": flat_doc_ids,
+            "doc_attention_mask": flat_doc_mask,
+            # Source input for CA-Former
+            "source_input_ids": flat_source_ids,
+            "source_attention_mask": flat_source_mask,
+            # Meta-information which are needed after re-ranking and gen loss calculation
+            "doclen_list": torch.tensor([item["doclen_list"] for item in batch]),
+            "a_len": torch.tensor([item["a_len"] for item in batch]),
+            # Answer input
+            "answer_ids": [item["answer_ids"] for item in batch],
+            # Question input for gen loss after re-ranking (Not padded)
+            "question_ids": [item["question_ids"] for item in batch],
+            # Question input for CA-Former
+            "roberta_question_ids": padded_roberta_question_ids,
+            "roberta_question_mask": padded_roberta_question_mask,
+            "scores_oracle": torch.stack([item["scores_oracle"] for item in batch]) if use_scores_oracle else None,
         }
 
-
-
     # def collate_fn(self, batch):
+    #     """
+    #     Collate function to combine multiple docs into a single batch.
+    #     """
     #     B = len(batch)
     #     K = len(batch[0]["doc_input_ids"])
 
-    #     max_seq_len = self.data_cfg.max_seq_length
-    #     max_tgt_len = self.data_cfg.topk_per_query * max_seq_len + self.data_cfg.max_ans_length
-        
-    #     flat_doc_ids = torch.full((B * K, max_seq_len), self.pad_token_id, dtype=torch.long)
-    #     flat_doc_mask = torch.zeros((B * K, max_seq_len), dtype=torch.long)
-    #     flat_source_ids = torch.full((B * K, max_seq_len), self.pad_token_id, dtype=torch.long)
-    #     flat_source_mask = torch.zeros((B * K, max_seq_len), dtype=torch.long)
-        
-    #     padded_target_ids = torch.full((B, max_tgt_len), self.pad_token_id, dtype=torch.long)
-    #     padded_target_mask = torch.zeros((B, max_tgt_len), dtype=torch.long)
-    #     target_labels = torch.full((B, max_tgt_len), -100, dtype=torch.long)
-        
+    #     max_doc_len = max(len(d) for item in batch for d in item["doc_input_ids"])
+    #     max_source_len = max(len(s) for item in batch for s in item["source_input_ids"])
+    #     max_roberta_q_len = max(len(item["roberta_question_ids"]) for item in batch)
+
+    #     flat_doc_ids = torch.full((B * K, max_doc_len), self.pad_token_id, dtype=torch.long)
+    #     flat_doc_mask = torch.zeros((B * K, max_doc_len), dtype=torch.long)
+    #     flat_source_ids = torch.full((B * K, max_source_len), self.pad_token_id, dtype=torch.long)
+    #     flat_source_mask = torch.zeros((B * K, max_source_len), dtype=torch.long)
+
+    #     # question ids will be used in later, and we should combine them with re-ranked doc_ids
+    #     # padded_question_ids = torch.full((B, max_q_len), self.roberta_pad_token_id, dtype=torch.long)
+    #     padded_roberta_question_ids = torch.full((B, max_roberta_q_len), self.roberta_pad_token_id, dtype=torch.long)
+    #     padded_roberta_question_mask = torch.zeros((B, max_roberta_q_len), dtype=torch.long)
+
+    #     # We do right padding
     #     for i, item in enumerate(batch):
+    #         # ----- Question -----
+    #         roberta_q_ids = item["roberta_question_ids"]
+    #         roberta_q_len = len(roberta_q_ids)
+    #         padded_roberta_question_ids[i, :roberta_q_len] = roberta_q_ids
+    #         padded_roberta_question_mask[i, :roberta_q_len] = 1
+    #         # ----- Doc & Src -----
     #         for j in range(K):
     #             idx = i*K + j
-                
+
     #             # Doc
     #             d_ids = item["doc_input_ids"][j]
-    #             d_len = min(len(d_ids), max_seq_len)
-    #             flat_doc_ids[idx, :d_len] = d_ids[:d_len]
+    #             d_len = len(d_ids)
+    #             flat_doc_ids[idx, :d_len] = d_ids
     #             flat_doc_mask[idx, :d_len] = 1
-                
+
     #             # Source
     #             s_ids = item["source_input_ids"][j]
-    #             s_len = min(len(s_ids), max_seq_len)
-    #             flat_source_ids[idx, :s_len] = s_ids[:s_len]
+    #             s_len = len(s_ids)
+    #             flat_source_ids[idx, :s_len] = s_ids
     #             flat_source_mask[idx, :s_len] = 1
 
-    #         # Target
-    #         t_ids = item["target_input_ids"]
-    #         t_len = min(len(t_ids), max_tgt_len)
-    #         padded_target_ids[i, :t_len] = t_ids[:t_len]
-    #         padded_target_mask[i, :t_len] = 1
-            
-    #         # Label
-    #         a_len = item["a_len"]
-    #         valid_a_len = min(a_len, t_len)
-    #         target_labels[i, t_len - valid_a_len : t_len] = padded_target_ids[i, t_len - valid_a_len : t_len]
-
     #     use_scores_oracle = batch[0]["scores_oracle"] is not None
-        
+
     #     return {
-    #         "idx": torch.tensor([item["idx"] for item in batch]),    # (B,)
-    #         "doc_input_ids": flat_doc_ids,                   # (B * K, S_D)
-    #         "doc_attention_mask": flat_doc_mask,        # (B * K, S_D)
-    #         "source_input_ids": flat_source_ids,             # (B * K, S_D)
-    #         "source_attention_mask": flat_source_mask,  # (B * K, S_D)
-    #         "target_input_ids": padded_target_ids,          # (B, K * S_D + max_ans_length)
-    #         "target_attention_mask": padded_target_mask,  # (B, K * S_D + max_ans_length)
+    #         "idx": torch.tensor([item['idx'] for item in batch]),    # (B,)
+    #         # Document input to be combined in gen loss
+    #         "doc_input_ids": flat_doc_ids,                   # (B * K, max_doc_len)
+    #         "doc_attention_mask": flat_doc_mask,             # (B * K, max_doc_len)
+    #         # Source input for CA-Former
+    #         "source_input_ids": flat_source_ids,             # (B * K, max_source_len)
+    #         "source_attention_mask": flat_source_mask,       # (B * K, max_source_len)
+    #         # Meta-information which are needed after re-ranking and gen loss calculation
     #         "doclen_list": torch.tensor([item["doclen_list"] for item in batch]),                  # (B, K)
-    #         "target_labels": target_labels,                   # (B, K * S_D + max_ans_length)
-    #         "a_len": torch.tensor([item["a_len"] for item in batch]),                            # (B,)
-    #         "question_ids": torch.stack([item["question_ids"] for item in batch]),                            # (B, q_len)
-    #         "question_attention_mask": torch.stack([item["question_attention_mask"] for item in batch]),    # (B, q_len)
+    #         "a_len": torch.tensor([item["a_len"] for item in batch]),                              # (B,)
+    #         # Answer input
+    #         "answer_ids": [item["answer_ids"] for item in batch],                                 # (B, a_len)
+    #         # Question input for gen loss after re-ranking (Not padded)
+    #         "question_ids": [item["question_ids"] for item in batch],                           # (B, q_len)
+    #         # Question input for CA-Former
+    #         "roberta_question_ids": padded_roberta_question_ids,                 # (B, roberta_q_len)
+    #         "roberta_question_attention_mask": padded_roberta_question_mask,     # (B, roberta_q_len)
     #         "scores_oracle": torch.stack([item["scores_oracle"] for item in batch]) if use_scores_oracle else None,  # (B, K) or None
     #     }
 

@@ -44,10 +44,17 @@ export PYTHONPATH=$PWD:$PYTHONPATH
 
 
 # Rerank Top-10 (total 100)
-sleep 30m
+# sleep 30m
+# python3 src/baselines/rag_inference.py \
+#     --config config/src/baselines/rag.yaml \
+#     data.name=hotpotqa-w \
+#     data.data_path=data/hotpotqa-w/retrieved/validation_1000r_top100.jsonl \
+#     data.topk_per_query=10 \
+#     data.do_rerank=False
+
 python3 src/baselines/rag_inference.py \
     --config config/src/baselines/rag.yaml \
     data.name=hotpotqa-w \
-    data.data_path=data/hotpotqa-w/retrieved/validation_top100.jsonl \
+    data.data_path=data/hotpotqa-w/retrieved/validation_1000r_top100.jsonl \
     data.topk_per_query=10 \
-    data.do_rerank=False
+    data.do_rerank=True

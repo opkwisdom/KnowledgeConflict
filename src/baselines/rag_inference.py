@@ -34,6 +34,7 @@ def rerank_contexts(
         "Query must be provided for reranking contexts."
     
     # Prepare pairs for reranking
+    ctxs = ctxs[10:]    # Skip the first 10 passages, only consider the retrieved ones
     passages = [f"Title: {ctx.title}\n\n{ctx.text}" for ctx in ctxs]
     scores = reranker_model.predict([(query, passage) for passage in passages],
                                     convert_to_numpy=False, convert_to_tensor=True, show_progress_bar=False)
@@ -59,6 +60,8 @@ def construct_baseline_context(
         contexts = []
         if do_rerank:
             ctxs = rerank_contexts(reranker_model, query, ctxs)
+        else:
+            ctxs = ctxs[10:]    # Skip the first 10 passages
         ctxs = ctxs[:topk] if topk > 0 else ctxs
 
         for ctx in ctxs:
