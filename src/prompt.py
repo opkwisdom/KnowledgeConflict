@@ -53,6 +53,7 @@ GENERATE_PROMPT = {
         "Question: {question}\n"
         "Answer: "
     ),
+
     "pseudo_answer": (
         "You are an expert logical reasoning agent. "
         "Given a question, the exact supporting facts, and the final short answer, "
@@ -65,7 +66,30 @@ GENERATE_PROMPT = {
         "- Supporting Facts:\n{supporting_facts}\n"
         "- Final Short Answer: {final_short_answer}\n\n"
         "Answer: "
-    )
+    ),
+    "pseudo_answer_short_v1": {
+        "You are an expert at writing minimal answer sentences. "
+        "Given a question and its final short answer, write ONE declarative sentence "
+        "that directly answers the question.\n\n"
+        "### Strict Rules\n"
+        "1. Use ONLY entities and concepts that appear in the question itself "
+        "or the final short answer. Do NOT introduce any new entity, location, or fact.\n"
+        "2. The sentence should be 10-20 words.\n"
+        "3. Do NOT include explanations, reasoning steps, or supporting evidence.\n"
+        "4. Do NOT use phrases like 'according to', 'as mentioned', 'the supporting fact says', "
+        "or any reference to source documents.\n"
+        "5. Output ONLY the sentence. No prefixes, no labels, no quotation marks.\n\n"
+        "### Input\n"
+        "- Question: {question}\n"
+        "- Final Short Answer: {final_short_answer}\n\n"
+        "### Output\n"
+        "from the question on the direct answer. Do not add explanatory information."
+    },
+    "pseudo_answer_short_v2": {
+        "You are an expert at writing minimal answer sentences. "
+        "Given a question and its final short answer, write ONE declarative sentence "
+        "that directly answers the question.\n\n"
+    }
 }
 
 ### Fact Checking Prompt Templates

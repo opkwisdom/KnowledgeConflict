@@ -79,7 +79,8 @@ def prepare_inputs(data, tokenizer):
         total_ctxs = prepare_ctxs(ctxs)
 
         question = item["question"]
-        answers = item["pseudo_answer"]
+        # answers = item["pseudo_answer"]
+        answers = item["answers"]
         # answers = item["answer"] if test_type == "base" else item["pseudo_answer"]
         if answers is None:
             continue
@@ -131,6 +132,7 @@ def main():
     parser.add_argument("--output_file", type=str, required=True)
     args = parser.parse_args()
 
+    # input_dir = "/workspaces/kvzip_nlplab/DISCA/data/train"
     input_dir = "/workspaces/kvzip_nlplab/DISCA/data/train"
     output_dir = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama"
     input_path = os.path.join(input_dir, args.input_file)

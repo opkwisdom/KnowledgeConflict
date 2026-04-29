@@ -19,7 +19,8 @@ from src.utils import (
 )
 
 # Popular cross-encoder
-RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"    # 22M
+# RERANKER_MODEL_NAME = "BAAI/bge-reranker-base"                  # 280M
 
 
 
@@ -81,6 +82,10 @@ def run_baseline_inference(
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     for idx, item in tqdm(enumerate(data), desc="Running RAG Inference", total=len(data)):
+        # Compare
+        # if item.pseudo_answer is None:
+        #     continue
+
         context = construct_baseline_context(
             item.ctxs,
             config.data.use_single_context,

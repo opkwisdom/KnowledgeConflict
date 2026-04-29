@@ -3,12 +3,13 @@ data:
   # data_path: data/nq/retrieved/validation_top100.jsonl
   name: hotpotqa-w
   data_path: data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl
-  # data_path: data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl
   max_seq_length: 1024
   use_single_context: False
 
   topk_per_query: 10
-  do_rerank: False
+  do_rerank: True
+
+  precompute_table_path: /workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_val_short_loss_precompute_table.h5
 
 model:
   model_name: meta-llama/Meta-Llama-3-8B-Instruct
@@ -20,7 +21,7 @@ model:
     max_new_tokens: 32
 
 generate_prompt_name: base
-output_dir: results/rag
+output_dir: results/oracle_loss_gen_test
 task: base
 run_baseline: True
 experiment_name:

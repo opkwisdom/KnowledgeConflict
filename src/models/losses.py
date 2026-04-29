@@ -1,5 +1,6 @@
 import torch
 import einops
+import torch.nn as nn
 import torch.nn.functional as F
 
 class SCIContrastiveLoss(torch.nn.Module):
@@ -112,6 +113,30 @@ class RankwiseGuideLoss(torch.nn.Module):
         right_term = torch.abs(target_diff) - torch.sign(target_diff) * input_diff
         rank_matrix = F.relu(right_term)
         denominator = K * (K - 1) if K > 1 else 1
-        batch_loss = rank_matrix.sum(dim=(1, 2)) * denominator
+        batch_loss = rank_matrix.sum(dim=(1, 2)) / denominator
         loss = batch_loss.mean()
+        return loss
+    
+
+class PairwiseRankGuideLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.loss_fn = nn.BCEWithLogitsLoss(reduction='none')
+
+    def forward(self, input_scores: torch.FloatTensor, target_scores: torch.FloatTensor):
+        """
+        Args:
+            input: Tensor of shape (B, K)
+            target: Tensor of shape (B, K)
+        Returns:
+            loss: Scalar tensor representing the rankwise score loss
+        """
+        input_diff = (input_scores.unsqueeze(2) - input_scores.unsqueeze(1)) * 10  # (B, K, K)
+        target_diff = target_scores.unsqueeze(2) - target_scores.unsqueeze(1)  # (B, K, K)
+        
+        target_labels = (target_diff > 0).float()
+        valid_mask = (target_diff != 0).float()
+        raw_loss = self.loss_fn(input_diff, target_labels)
+        masked_loss = raw_loss * valid_mask
+        loss = masked_loss.sum() / valid_mask.sum().clamp(min=1e-6)
         return loss

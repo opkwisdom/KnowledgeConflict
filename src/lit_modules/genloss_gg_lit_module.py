@@ -2,9 +2,6 @@ import torch.nn as nn
 import torch
 import logging
 import re
-import wandb
-import einops
-import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from typing import Union
 from pytorch_lightning import LightningModule
@@ -12,7 +9,7 @@ from omegaconf import DictConfig
 from transformers import get_linear_schedule_with_warmup, AutoTokenizer, AutoModelForCausalLM
 
 from utils import compute_metrics, parse_reference_answer
-from models import load_model, CAFormerGGClassifier, RankwiseGuideLoss
+from models import load_model, CAFormerGGClassifier, RankwiseGuideLoss, PairwiseRankGuideLoss
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +33,10 @@ class GenLossGGLightningModule(LightningModule):
         self.score_transform = getattr(cfg, "score_transform", None)
         self.scaling_factor = getattr(cfg, "scaling_factor", 1.0)
         self.T = getattr(cfg, "T", 1.0)
-        # self.pointwise_guide_loss_fn = nn.L1Loss() if self.score_transform is None else nn.BCEWithLogitsLoss()
-        self.pointwise_guide_loss_fn = nn.MSELoss()
+        # self.pointwise_guide_loss_fn = nn.MSELoss()
+        self.pointwise_guide_loss_fn = nn.SmoothL1Loss(reduction='mean')
         self.rankwise_guide_loss_fn = RankwiseGuideLoss()
+        # self.rankwise_guide_loss_fn = PairwiseRankGuideLoss()
         self.gen_loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
 
         self.val_logits = []
@@ -242,12 +240,12 @@ class GenLossGGLightningModule(LightningModule):
         # Guide loss (Pointwise + Rankwise)
         scores_hat = scores_hat.view(-1)
         scores_oracle = scores_oracle.view(-1)
-        pointwise_guide_loss = self.pointwise_guide_loss_fn(scores_hat, scores_oracle)
+        raw_pointwise_guide_loss = self.pointwise_guide_loss_fn(scores_hat, scores_oracle)
         B, K = batch["doclen_list"].shape
-        rankwise_guide_loss = self.rankwise_guide_loss_fn(scores_hat.reshape(B, K), scores_oracle.reshape(B, K))
+        raw_rankwise_guide_loss = self.rankwise_guide_loss_fn(scores_hat.reshape(B, K), scores_oracle.reshape(B, K))
         
-        pointwise_guide_loss = (1 - self.alpha) * pointwise_guide_loss
-        rankwise_guide_loss = self.alpha * rankwise_guide_loss
+        pointwise_guide_loss = (1 - self.alpha) * raw_pointwise_guide_loss
+        rankwise_guide_loss = self.alpha * raw_rankwise_guide_loss
         guide_loss = pointwise_guide_loss + rankwise_guide_loss
 
         # TODO: Re-ranking, select Top-R
@@ -258,13 +256,43 @@ class GenLossGGLightningModule(LightningModule):
         gen_loss = self.compute_interleaving_loss(batch, query_hidden_states, top_r_indices)[0]
         loss = self.gamma * guide_loss + gen_loss
         
-        
         # self.log("train/oracle_score", scores_oracle, on_step=True, on_epoch=True, sync_dist=True)
-        self.log("train/pointwise_guide_loss", self.gamma * pointwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
-        self.log("train/rankwise_guide_loss", self.gamma * rankwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/pointwise_guide_loss", self.gamma * raw_pointwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/rankwise_guide_loss", self.gamma * raw_rankwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train/guide_loss", self.gamma * guide_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train/gen_loss", gen_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train/loss", loss, on_step=True, on_epoch=True, sync_dist=True)
+
+        # Debugging
+        if batch_idx % 100 == 0:
+            logger.info(f"\n{'='*50}")
+            logger.info(f"[Val Epoch / Global Step: {self.global_step}] 점수 분포 분석")
+            logger.info(f"{'='*50}")
+            
+            # 1. Oracle Score (정답) 통계
+            logger.info(f"[Target: scores_oracle]")
+            logger.info(f"   Mean: {scores_oracle.mean().item():.6f} | Std : {scores_oracle.std().item():.6f}")
+            logger.info(f"   Min : {scores_oracle.min().item():.6f} | Max : {scores_oracle.max().item():.6f}")
+            
+            # 2. Hat Score (예측) 통계
+            logger.info(f"[Prediction: scores_hat]")
+            logger.info(f"   Mean: {scores_hat.mean().item():.6f} | Std : {scores_hat.std().item():.6f}")
+            logger.info(f"   Min : {scores_hat.min().item():.6f} | Max : {scores_hat.max().item():.6f}")
+            logger.info(f"{'-'*50}")
+            
+            # 3. 샘플 값 직접 눈으로 비교 (하위 5개 / 상위 5개)
+            # 타겟을 기준으로 정렬하여, 타겟이 낮을/높을 때 모델의 예측값이 어떻게 따라가는지 확인
+            sorted_oracle, sorted_indices = torch.sort(scores_oracle)
+            matched_hat = scores_hat[sorted_indices]
+            
+            logger.info(f"[하위 5개 샘플]")
+            logger.info(f"   Oracle: {sorted_oracle[:5].detach().cpu().float().numpy()}")
+            logger.info(f"   Hat   : {matched_hat[:5].detach().cpu().float().numpy()}")
+            
+            logger.info(f"[상위 5개 샘플]")
+            logger.info(f"   Oracle: {sorted_oracle[-5:].detach().cpu().float().numpy()}")
+            logger.info(f"   Hat   : {matched_hat[-5:].detach().cpu().float().numpy()}")
+            logger.info(f"{'='*50}\n")
 
         return loss
 
@@ -282,12 +310,12 @@ class GenLossGGLightningModule(LightningModule):
         # Guide loss (Pointwise + Rankwise)
         scores_hat = scores_hat.view(-1)
         scores_oracle = scores_oracle.view(-1)
-        pointwise_guide_loss = self.pointwise_guide_loss_fn(scores_hat, scores_oracle)
+        raw_pointwise_guide_loss = self.pointwise_guide_loss_fn(scores_hat, scores_oracle)
         B, K = batch["doclen_list"].shape
-        rankwise_guide_loss = self.rankwise_guide_loss_fn(scores_hat.reshape(B, K), scores_oracle.reshape(B, K))
+        raw_rankwise_guide_loss = self.rankwise_guide_loss_fn(scores_hat.reshape(B, K), scores_oracle.reshape(B, K))
         
-        pointwise_guide_loss = (1 - self.alpha) * pointwise_guide_loss
-        rankwise_guide_loss = self.alpha * rankwise_guide_loss
+        pointwise_guide_loss = (1 - self.alpha) * raw_pointwise_guide_loss
+        rankwise_guide_loss = self.alpha * raw_rankwise_guide_loss
         guide_loss = pointwise_guide_loss + rankwise_guide_loss
         
         # TODO: Re-ranking, select Top-R
@@ -302,11 +330,12 @@ class GenLossGGLightningModule(LightningModule):
         self.val_labels.extend(batch_labels)
 
         # self.log("valid/oracle_score", scores_oracle, on_step=False, on_epoch=True, sync_dist=True)
-        self.log("train/pointwise_guide_loss", self.gamma * pointwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
-        self.log("train/rankwise_guide_loss", self.gamma * rankwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
-        self.log("train/guide_loss", self.gamma * guide_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("valid/pointwise_guide_loss", self.gamma * raw_pointwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("valid/rankwise_guide_loss", self.gamma * raw_rankwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("valid/guide_loss", self.gamma * guide_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("valid/gen_loss", gen_loss, on_step=False, on_epoch=True, sync_dist=True)
         self.log("valid/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+
 
     def parse_final_answer(self, text: str) -> str:
         match = re.search(r'Final Answer:\s*(.*)', text, re.IGNORECASE)
@@ -351,8 +380,23 @@ class GenLossGGLightningModule(LightningModule):
         checkpoint["state_dict"] = caformer_clf_state_dict
 
     def configure_optimizers(self):
-        trainable_params = filter(lambda p: p.requires_grad, self.caformer_clf.parameters())
-        optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate, fused=True)
+        # trainable_params = filter(lambda p: p.requires_grad, self.caformer_clf.parameters())
+        caformer_params = [
+            p for p in self.caformer_clf.ca_former.parameters() if p.requires_grad
+        ]
+    
+        classifier_params = [
+            p for p in self.caformer_clf.classifier.parameters() if p.requires_grad
+        ]
+
+        # Separate parameter groups, Classifier is random initialized
+        optimizer_grouped_parameters = [
+            {"params": caformer_params, "lr": self.learning_rate},
+            {"params": classifier_params, "lr": 1e-3}
+        ]
+        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, fused=True)
+
+        # optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate, fused=True)
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = int(self.cfg.warmup_ratio * total_steps)
 
@@ -374,6 +418,9 @@ class GenLossGGLightningModule(LightningModule):
         """
         Linearly teacher forcing
         """
+        if not self.training:
+            return 1.0
+        
         current_step = self.global_step
         total_steps = self.trainer.estimated_stepping_batches
         max_epochs = self.trainer.max_epochs

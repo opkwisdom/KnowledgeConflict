@@ -12,8 +12,8 @@ data:
   data_path: data/train/mhqa_train_subset_force.jsonl
 
   ### 1/16 dataset (pilot for hypothesis testing)
-  name: mhqa
-  data_path: data/train/mhqa_train_pilot.jsonl
+  # name: mhqa
+  # data_path: data/train/mhqa_train_pilot.jsonl
 
   max_seq_length: 256
   max_ans_length: 200
@@ -60,7 +60,7 @@ train:
   freeze_pretrained: True
   topk_per_query: 10  # Top-R reranking docs
 
-  scaling_factor: 10
+  # scaling_factor: 10
   accumulate_grad_batches: 8  # [8, 16, 32]
   append_question: True
 
@@ -68,8 +68,8 @@ train:
   score_transform: tanh     # [None, sigmoid, tanh]
   T: 0.5
 
-  gamma: 10         # guide loss weight
-  alpha: 0.8        # rankwise guide loss weight
+  gamma: 1         # guide loss weight
+  alpha: 0.8        # rankwise guide loss weight, 0 = don't use
 
   # do_isolate: True  # Document-Isolated Masking
 

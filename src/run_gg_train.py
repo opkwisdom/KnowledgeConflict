@@ -73,7 +73,7 @@ def main():
                               (f"{config.exp_type}_LR={config.train.learning_rate}"
                                f"_{from_stage2}_BS={config.data.batch_size}_AGB={config.train.accumulate_grad_batches}"
                                f"_Q={config.train.append_question}_ST={config.train.score_transform}_Gamma={config.train.gamma}"
-                               f"_T={config.train.T}"))
+                               f"_T={config.train.T}_Alpha={config.train.alpha}_time={current_time}"))
     checkpoint_callback = ModelCheckpoint(
         monitor='valid/loss',
         dirpath=output_dir,

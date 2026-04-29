@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=1
 export PYTHONPATH=$PWD:$PYTHONPATH
 
 # Iterate Map
@@ -57,7 +57,7 @@ python3 src/baselines/rag_inference.py \
     data.name=hotpotqa-w \
     data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl \
     data.topk_per_query=10 \
-    data.do_rerank=True
+    data.do_rerank=False
 
 
 # python3 src/baselines/rag_inference.py \

@@ -11,7 +11,7 @@ from tqdm import tqdm
 from collections import defaultdict
 from vllm import LLM, SamplingParams
 
-PSEUDO_ANSWER_PROMPT = GENERATE_PROMPT["pseudo_answer"]
+PSEUDO_ANSWER_PROMPT = GENERATE_PROMPT["pseudo_answer_short_v1"]
 
 def get_gold_ctxs(supporting_facts, contexts):
     titles = contexts["title"]
@@ -68,9 +68,13 @@ def generate_pseudo_answers(data, model, tokenizer, sampling_params, batch_size=
             # new_data.append(item)
             continue
     
+        # prompt = PSEUDO_ANSWER_PROMPT.format(
+        #     question=question,
+        #     supporting_facts=gold_ctx,
+        #     final_short_answer=final_short_answer
+        # )
         prompt = PSEUDO_ANSWER_PROMPT.format(
             question=question,
-            supporting_facts=gold_ctx,
             final_short_answer=final_short_answer
         )
         prompt_text = tokenizer.apply_chat_template(

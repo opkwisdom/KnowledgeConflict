@@ -174,10 +174,10 @@ def main():
     logger.info(OmegaConf.to_yaml(config))
 
     # Load data
-    if "nq" in config.data.data_path:
-        data = load_relevance_dataset(config.data.data_path)
-    else:
-        data = load_qa_dataset(config.data.data_path)
+    # if "nq" in config.data.data_path:
+    #     data = load_relevance_dataset(config.data.data_path)
+    # else:
+    data = load_qa_dataset(config.data.data_path)
     # data = data[:50]
     
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")

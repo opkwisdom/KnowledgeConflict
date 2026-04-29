@@ -156,8 +156,8 @@ def main():
     output_margin_path = f"src/tests/oracle_loss/{test_type}_margin_plot.png" \
         if not do_vllm else f"src/tests/oracle_loss/{test_type}_vllm_margin_plot.png"
 
-    with open(input_path, "r") as f:
-        data = json.load(f)
+    # with open(input_path, "r") as f:
+    #     data = json.load(f)
 
     plot_genloss(data, output_path)
     plot_genloss_diff(data, output_margin_path)

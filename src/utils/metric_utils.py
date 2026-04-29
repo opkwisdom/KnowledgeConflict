@@ -2,9 +2,11 @@ import re
 import string
 import regex
 from collections import Counter
-from typing import List, Union
-from dataclasses import dataclass
-from pydantic import BaseModel
+from typing import Dict, List, Union
+from dataclasses import dataclass, asdict
+import logging
+import json
+
 
 @dataclass
 class MetricResult:
@@ -13,6 +15,13 @@ class MetricResult:
     precision: float
     f1: float
 
+@dataclass
+class InferenceResult:
+    id: int
+    question: str
+    pred_answer: str
+    answers: List[str]
+    metrics: MetricResult
 
 class SimpleTokenizer(object):
     ALPHA_NUM = r'[\p{L}\p{N}\p{M}]+'
@@ -156,6 +165,40 @@ def compute_metrics(a_pred: str, a_true: Union[str, List[str]]) -> MetricResult:
         precision=prec,
         f1=f1,
     )
+
+
+def validate_and_save_results(
+    inference_list: Dict[str, List[InferenceResult]],
+    output_dir: str,
+    logger: logging.Logger,
+) -> None:
+    summary_path = f"{output_dir}/inference_summary.txt"
+    all_results_path = f"{output_dir}/inference_results.json"
+
+    total = len(inference_list)
+    correct = sum([1 for res in inference_list if res.metrics.soft_em])
+    recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
+    precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
+    f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
+
+    accuracy = correct / total if total > 0 else 0.0
+    logger.info(f"Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
+                f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
+    summary = {
+        "total": total,
+        "correct": correct,
+        "accuracy": round(accuracy, 4),
+        "recall": round(recall, 4),
+        "precision": round(precision, 4),
+        "f1": round(f1, 4),
+    }
+    
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, ensure_ascii=False, indent=4)
+    logger.info(f"Saved inference summary to {summary_path}")
+    with open(all_results_path, 'w') as f:
+        json_results = [asdict(res) for res in inference_list]
+        json.dump(json_results, f, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":
     # Simple test

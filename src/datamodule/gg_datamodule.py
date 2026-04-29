@@ -79,7 +79,7 @@ class GGDataset(Dataset):
         doclen_list = []
         doc_input_ids = []
         source_input_ids = []
-        ctxs = item.ctxs[:100]  # Only use 100 contexts
+        ctxs = item.ctxs[:50]  # Only use 50 contexts
         for ctx in ctxs:
             ctx_text = f"Title: {ctx.title}\n\n{ctx.text}"
             tokenized_ctx = self.llm_tokenizer(
@@ -139,7 +139,7 @@ class GGDataModule(LightningDataModule):
                 for key in f.keys():
                     # self.oracle_cache[key] = torch.tensor(f[key][score_mode][:], dtype=torch.bfloat16)
                     oracle_scores = f[key]['base_loss'][:] - f[key]['doc_loss'][:]
-                    self.oracle_cache[key] = torch.tensor(oracle_scores[:100], dtype=torch.bfloat16)
+                    self.oracle_cache[key] = torch.tensor(oracle_scores[:50], dtype=torch.bfloat16)
             
         dataset = [asdict(item) for item in tqdm(full_data, desc="Converts to dict")]
         hf_dataset = HFDataset.from_list(dataset)

@@ -2,11 +2,16 @@ from dataclasses import dataclass, asdict, field, fields
 from typing import Any, Dict, List, Optional, Union
 import json
 import os
+import logging
+import torch
+import h5py
 from tqdm import tqdm
 from datasets import load_dataset, DatasetDict
 
 from .metric_utils import MetricResult
 
+
+logger = logging.getLogger(__name__)
 JsonType = Dict[str, Any]
 
 ### Base QA Example Dataclasses
@@ -27,7 +32,7 @@ class QAExample:
     name: str
     pseudo_answer: Optional[str] = None
     ans_type: Optional[str] = None
-    idx: int = None
+    idx: Union[int, str] = None
     ctxs: List[CtxExample] = field(default_factory=list)
 
     @classmethod
@@ -180,6 +185,17 @@ def parse_reference_answer(formatted_answer: str) -> List[str]:
         return formatted_answer.split(" and ")
     else:
         return [formatted_answer]
+    
+def load_h5_scores(file_path: str) -> Dict[str, torch.Tensor]:
+    assert os.path.exists(file_path), \
+        f"File not found: {file_path}. Please ensure the file exists and the path is correct."
+    oracle_scores = {}
+    with h5py.File(file_path, 'r') as f:
+        for _key in f.keys():
+            sample_oracle_scores = f[_key]["base_loss"][:] - f[_key]["doc_loss"][:]
+            oracle_scores[_key] = torch.tensor(sample_oracle_scores, dtype=torch.bfloat16)
+
+    return oracle_scores
 
 if __name__ == "__main__":
     # Example usage

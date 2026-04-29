@@ -17,4 +17,8 @@ declare -A DATA_MAP
 # done
 
 python3 src/baselines/pure_inference.py \
-    --config config/src/baselines/pure_llm.yaml
+    --config config/src/baselines/pure_llm.yaml \
+    data.name=hotpotqa-w \
+    data.data_path=data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl
+    # data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl
+    
