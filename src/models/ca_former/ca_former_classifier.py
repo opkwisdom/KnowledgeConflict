@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Union
 from omegaconf import DictConfig
 
-from .modeling_ca_former import SingleHiddenCAFormer, MultiHiddenCAFormer
+from .modeling_ca_former import SingleHiddenCAFormer, MultiHiddenCAFormer, MultiHiddenCAFormerForGG
 
 
 class CAFormerClassifier(nn.Module):
@@ -50,17 +50,18 @@ class CAFormerClassifier(nn.Module):
 
 
 class CAFormerGGClassifier(nn.Module):
-    def __init__(self, config: DictConfig, ca_former: Union[SingleHiddenCAFormer, MultiHiddenCAFormer]):
+    def __init__(self, config: DictConfig, caformer: MultiHiddenCAFormerForGG):
         super().__init__()
         self.config = config
-        self.ca_former = ca_former
+        self.caformer = caformer
 
         dropout_prob = getattr(self.config.caformer, "dropout", 0.1)
+        hidden_size = self.caformer.model.config.hidden_size
         self.classifier = self.classifier = nn.Sequential(
-            nn.Linear(self.config.caformer.llm_width, self.config.caformer.llm_width),
+            nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
             nn.Dropout(dropout_prob),
-            nn.Linear(self.config.caformer.llm_width, 1)
+            nn.Linear(hidden_size, 1)
         )
 
     def pooling(self, query_hidden_states: torch.FloatTensor):
@@ -87,12 +88,15 @@ class CAFormerGGClassifier(nn.Module):
             llm_hidden_states: Tensor of shape (B, L, S, D_llm)
         Returns:
             scores: Tensor of shape (B, 1)
-            query_hidden_states: Tensor of shape (B, K, D_llm)
+            cls_query_hidden_states: Tensor of shape (B, M_c, D_llm)
+            gen_query_hidden_states: Tensor of shape (B, M, D_llm)
         """
-        _, query_hidden_states = self.ca_former(llm_hidden_states, attention_mask, question_input_ids, question_attention_mask)   # (B, K, D_llm)
-        pooled_output = self.pooling(query_hidden_states)
+        cls_query_hidden_states, gen_query_hidden_states = self.caformer(
+            llm_hidden_states, attention_mask, question_input_ids, question_attention_mask)   # (B, K, D_llm)
+        pooled_output = self.pooling(cls_query_hidden_states)   # (B, D_llm)
         scores = self.classifier(pooled_output).flatten()
         outputs = (scores,)
+        # Classification query hidden states are used for classification only
         if output_hidden_states:
-            outputs += (query_hidden_states,)
+            outputs += (gen_query_hidden_states,)
         return outputs

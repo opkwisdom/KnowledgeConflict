@@ -1,0 +1,96 @@
+data:
+  # name: odqa
+  # data_path: data/prev_ds/train/odqa_train_with_id.jsonl
+  # data_path: data/train/odqa_train_top100.jsonl
+  
+  ### half dataset (final)
+  # name: mhqa
+  # data_path: data/train/mhqa_train_half_force.jsonl
+
+  ### 1/8 dataset
+  name: mhqa
+  data_path: data/train/mhqa_train_subset_force.jsonl
+
+  ### 50 sample dataset (testing)
+  # name: mhqa
+  # data_path: data/train/mhqa_train_test.jsonl
+
+  ### 1/16 dataset (pilot for hypothesis testing)
+  # name: mhqa
+  # data_path: data/train/mhqa_train_pilot.jsonl
+
+  max_seq_length: 256
+  max_ans_length: 32  # Short answer
+
+  batch_size: 2
+  num_workers: 2
+  first_topk: 50
+  topk_per_query: 10
+  test_size: 0.05
+  seed: 42
+
+  use_precompute_table: True  # Use pre-compute table or not
+  precompute_table_path: /workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/short_loss_half_precompute_table.h5
+
+  use_pseudo_answer: False
+
+model:
+  model_name: meta-llama/Meta-Llama-3-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+
+caformer:
+  model_name_or_path: roberta-base
+  query_length: 32      # BLIP-2 default setting
+  llm_width:    # Post initialized
+
+  pooling_strategy: max
+  dropout: 0.1
+
+  use_linear_proj: True   # To embed as soft-prompt
+  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
+  # ckpt_path: None         # From scratch
+
+  ### Stage-3
+  classifier_mode: random
+  classifier_query_length: 8
+  attention_mode: block
+  use_causal: True
+
+train:
+  learning_rate: 2e-5
+  warmup_ratio: 0.05
+  max_epochs: 2
+
+  n_iter: 1   # the number of iterations for Taylor approximation
+  max_interleaving_len:   # Post initialized
+  freeze_pretrained: True
+  topk_per_query: 10  # Top-R reranking docs
+
+  # scaling_factor: 10
+  accumulate_grad_batches: 8  # [8, 16, 32]
+  append_question: True
+
+  # oracle_mode: marginal   # [whole, marginal, top-1, ..., top-10]
+  score_transform: tanh     # [None, sigmoid, tanh]
+  T: 2.0
+
+  gamma: 1         # guide loss weight
+  alpha: 0.8        # rankwise guide loss weight, 0 = don't use
+
+  # do_isolate: True  # Document-Isolated Masking
+  precompute_table_path: /workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/short_loss_half_precompute_table.h5
+
+
+seed: 42
+debug_mode: False  # Only activate when debugging
+
+generate_prompt_name: base
+
+output_dir: /workspaces/kvzip_nlplab/checkpoint
+project_name: caformer
+exp_type: multi

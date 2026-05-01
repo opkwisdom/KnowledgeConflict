@@ -2,10 +2,11 @@ import re
 import string
 import regex
 from collections import Counter
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Tuple
 from dataclasses import dataclass, asdict
 import logging
 import json
+import numpy as np
 
 
 @dataclass
@@ -200,13 +201,39 @@ def validate_and_save_results(
         json_results = [asdict(res) for res in inference_list]
         json.dump(json_results, f, ensure_ascii=False, indent=4)
 
+def compute_ndcg(
+    preds: np.ndarray,
+    labels: np.ndarray,
+    kvalues: List[int] = [1, 3, 5, 10]
+) -> List[float]:
+    min_labels = np.min(labels)
+    if min_labels < 0:
+        labels = labels - min_labels
+
+    preds_ranks = np.argsort(-preds)
+    ideal_ranks = np.argsort(-labels)
+
+    ndcg_scores = []
+    for k in kvalues:
+        dcg = np.sum((labels[preds_ranks[:k]] / np.log2(np.arange(2, k + 2))))
+        idcg = np.sum((labels[ideal_ranks[:k]] / np.log2(np.arange(2, k + 2))))
+        ndcg = dcg / idcg if idcg > 0 else 0.0
+        ndcg_scores.append(ndcg)
+    return ndcg_scores
+
+
 if __name__ == "__main__":
     # Simple test
-    pred = "The capital of France is Paris."
-    trues = ["Paris", "The capital city is Paris."]
+    # pred = "The capital of France is Paris."
+    # trues = ["Paris", "The capital city is Paris."]
 
-    recall_score = recall(pred, trues)
-    precision_score = precision(pred, trues)
-    f1 = f1_score(pred, trues)
-    import pdb; pdb.set_trace()
-    print(has_answer(pred, trues))  # Should return True
+    # recall_score = recall(pred, trues)
+    # precision_score = precision(pred, trues)
+    # f1 = f1_score(pred, trues)
+    # import pdb; pdb.set_trace()
+    # print(has_answer(pred, trues))  # Should return True
+
+    x = np.array([0.5, 0.8, 0.2, 0.7, -0.5, 0.1, 0.1, 0.0, 0.9, 1.5])
+    y = np.array([0.3, -0.2, 0.1, 0.6, -0.4, 0.2, 0.0, 0.1, 0.8, 1.0])
+    metrics = compute_ndcg(x, y)
+    print(metrics)

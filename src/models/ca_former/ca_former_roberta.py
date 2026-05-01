@@ -776,6 +776,7 @@ class RobertaModel(RobertaPreTrainedModel):
         dtype = self.dtype
 
         if attention_mask.dim() == 3:
+            # Automatically add the head dimension
             extended_attention_mask = attention_mask[:, None, :, :]
         elif attention_mask.dim() == 2:
             # Provided a padding mask of dimensions [batch_size, seq_length]
@@ -818,6 +819,7 @@ class RobertaModel(RobertaPreTrainedModel):
                     )
                 extended_attention_mask = causal_mask[:, None, :, :] * attention_mask[:, None, None, :]
             else:
+                # (B, H, Q, K)
                 extended_attention_mask = attention_mask[:, None, None, :]
         else:
             raise ValueError(

@@ -9,9 +9,9 @@ import torch
 import os
 import omegaconf.base
 
-from models import MultiHiddenCAFormer, CAFormerGGClassifier, load_model
+from models import MultiHiddenCAFormerForGG, CAFormerGGClassifier, load_model
 from datamodule import GGDataModule
-from lit_modules import GGLightningModule, GenLossGGLightningModule
+from lit_modules import GGLightningModule, GenLossClfLightningModule
 from utils import setup_logger, load_config
 
 
@@ -44,8 +44,8 @@ def main():
 
     config = load_config()
     seed_everything(config.seed)
-    experiment_name = "stage3_gradient_guided_train"
-    config.output_dir = os.path.join(config.output_dir, experiment_name)
+    experiment_name = "stage3_clf_only_train"
+    config.output_dir = os.path.join(config.output_dir, experiment_name, "test")
     setup_logger("main", config.output_dir)
     logger = logging.getLogger(__name__)
     logger.info("Configuration Loaded:")
@@ -56,7 +56,7 @@ def main():
 
     llm, llm_tokenizer = load_model(config.model.model_name)
     config.caformer.llm_width = llm.config.hidden_size  # post-init
-    caformer = MultiHiddenCAFormer(config.caformer).to(dtype=torch.bfloat16)
+    caformer = MultiHiddenCAFormerForGG(config.caformer).to(dtype=torch.bfloat16)
     # Load CAFormer weights from the best checkpoint of stage 2
     caformer, resume = load_checkpoint(caformer, config.caformer.ckpt_path)
     caformer_clf = CAFormerGGClassifier(config, caformer).to(dtype=torch.bfloat16)
@@ -64,7 +64,7 @@ def main():
     config.train.max_interleaving_len = config.data.topk_per_query * (config.data.max_seq_length + config.caformer.query_length) \
                                         + config.data.max_ans_length
     # lightning_module = GGLightningModule(config.train, llm, llm_tokenizer, caformer_clf)
-    lightning_module = GenLossGGLightningModule(config.train, llm, llm_tokenizer, caformer_clf)
+    lightning_module = GenLossClfLightningModule(config.train, llm, llm_tokenizer, caformer_clf)
 
     # Callbacks
     from_stage2 = "fromST2" if resume else "Scratch"
@@ -73,7 +73,10 @@ def main():
     output_dir = os.path.join(config.output_dir,
                               (f"{config.exp_type}_LR={config.train.learning_rate}"
                                f"_{from_stage2}_BS={batch_size}"
-                               f"_Q={config.train.append_question}_ST={config.train.score_transform}_Gamma={config.train.gamma}"
+                               f"_ST={config.train.score_transform}"
+                               f"_CMode={config.caformer.classifier_mode}"
+                               f"_AMode={config.caformer.attention_mode}"
+                               f"_Pool={config.caformer.pooling_strategy}"
                                f"_T={config.train.T}_Alpha={config.train.alpha}_time={current_time}"))
     checkpoint_callback = ModelCheckpoint(
         monitor='valid/loss',
@@ -90,7 +93,7 @@ def main():
     wandb_logger = WandbLogger(
         project=config.project_name,
         name=name,
-        tags=["GG"],
+        tags=["GG_CLF"],
         save_dir=output_dir,
     )
 

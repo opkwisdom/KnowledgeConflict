@@ -1,13 +1,14 @@
 data:
-  name: nq
-  data_path: data/nq/parametric_relevance_tagged/validation.json
+  name: hotpotqa-w
+  data_path: data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl
   
   max_query_length: 32
   max_seq_length: 256
   max_length: 3072
-  use_single_context: True
+  use_single_context: False
 
-  batch_size: 4
+  topk_per_query: 10  # Final number of documents after re-ranking
+  batch_size: 2
   seed: 42
 
 model:
@@ -28,7 +29,7 @@ caformer:
   dropout: 0.1
 
   use_linear_proj: True   # To embed as soft-prompt
-  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage3_gradient_guided_train/multi_LR=2e-05_fromST2_BS=1_AGB=16_Q=True_ST=tanh_Lamdba=10_T=0.25/multi-01-006719-valid_loss=3.7326.ckpt
+  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage3_gradient_guided_train/multi_LR=2e-05_fromST2_BS=1_AGB=8_Q=True_ST=tanh_Gamma=10.0_T=0.5_Alpha=0.5_time=20260427-192746/multi-00-000358-valid_loss=1.4727.ckpt
 
 seed: 42
 
@@ -39,4 +40,4 @@ base_prompt_name: pure-llm-brief-2
 output_dir: /workspaces/kvzip_nlplab/DISCA/results/disca
 project_name: caformer
 exp_type: multi
-experiment_name: QO+tanh
+experiment_name: Alpha=0.5

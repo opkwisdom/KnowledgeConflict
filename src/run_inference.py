@@ -1,5 +1,4 @@
 from pytorch_lightning import seed_everything
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from typing import List
 from tqdm import tqdm
@@ -11,7 +10,7 @@ import json
 
 from models import MultiHiddenCAFormer, CAFormerGGClassifier, DISCA, load_model
 from utils import (
-    setup_logger, load_config, load_relevance_dataset, compute_metrics,
+    setup_logger, load_config, load_qa_dataset, compute_metrics,
     RelevanceQAExample, InferenceResult
 )
 
@@ -122,7 +121,8 @@ def main():
     if not load_success:
         logger.error("Failed to load model checkpoint. Exiting inference.")
         return
-    dataset = load_relevance_dataset(config.data.data_path)
+    dataset = load_qa_dataset(config.data.data_path)
+    dataset = dataset[:10]  # For quick testing
 
     # Do inference on validation set and save results
     results = run_inference(config, model, dataset)

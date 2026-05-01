@@ -1,2 +1,2 @@
-from .modeling_ca_former import SingleHiddenCAFormer, MultiHiddenCAFormer
+from .modeling_ca_former import SingleHiddenCAFormer, MultiHiddenCAFormer, MultiHiddenCAFormerForGG
 from .ca_former_classifier import CAFormerClassifier, CAFormerGGClassifier
