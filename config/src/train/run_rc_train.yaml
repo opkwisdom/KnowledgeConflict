@@ -29,7 +29,9 @@ caformer:
   dropout: 0.1
 
   use_linear_proj: True   # To embed as soft-prompt
-  ckpt_dir: /workspaces/kvzip_nlplab/checkpoint/stage1_ctr_train/multi_LR=0.0001_M-W=0.1_freeze=True/multi-epoch=00-valid
+  # ckpt_dir: /workspaces/kvzip_nlplab/checkpoint/stage1_ctr_train/multi_LR=0.0001_M-W=0.1_freeze=True/multi-epoch=00-valid
+  ckpt_dir:
+  use_causal: False
 
 train:
   learning_rate: 1e-4

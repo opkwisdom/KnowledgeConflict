@@ -2,17 +2,34 @@ from pytorch_lightning import seed_everything
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from typing import List
 from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from dataclasses import dataclass, asdict
+import torch.distributed as dist
 import logging
 import torch
 import os
 import json
 
-from models import MultiHiddenCAFormer, CAFormerGGClassifier, DISCA, load_model
+from models import MultiHiddenCAFormerForGG, CAFormerGGClassifier, DISCA, load_model
 from utils import (
-    setup_logger, load_config, load_qa_dataset, compute_metrics,
-    RelevanceQAExample, InferenceResult
+    setup_logger, load_config, load_qa_dataset, compute_metrics, validate_and_save_results,
+    QAExample, InferenceResult
 )
+
+def setup_ddp():
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+    return local_rank
+
+def cleanup_ddp():
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+def is_main_process():
+    return (not dist.is_initialized()) or dist.get_rank() == 0
+
 
 def load_checkpoint(model: CAFormerGGClassifier, checkpoint_path):
     logger = logging.getLogger(__name__)
@@ -37,15 +54,14 @@ def load_checkpoint(model: CAFormerGGClassifier, checkpoint_path):
 def run_inference(
     config: DictConfig,
     model: DISCA,
-    dataset: List[RelevanceQAExample]
+    dataset: List[QAExample]
 ) -> List[InferenceResult]:
-    logger = logging.getLogger(__name__)
     outputs = []
     batch_size = config.data.batch_size
     for i in tqdm(range(0, len(dataset), batch_size), desc="Running Inference"):
         batch = dataset[i:i+batch_size]
         queries = [item.question for item in batch]
-        contexts_list = [item.ctxs for item in batch]
+        contexts_list = [item.ctxs[10:60] for item in batch]  # exclude the top 10 gold
         answers = [item.answers for item in batch]
         
         batch_answers = model.generate(queries, contexts_list)
@@ -63,70 +79,154 @@ def run_inference(
 
 
 
-def save_results(
-    inference_list: List[InferenceResult],
-    output_dir: str
-) -> None:
-    logger = logging.getLogger(__name__)
-    os.makedirs(output_dir, exist_ok=True)
-    summary_path = f"{output_dir}/inference_summary.txt"
-    all_results_path = f"{output_dir}/inference_results.json"
 
-    total = len(inference_list)
-    correct = sum([1 for res in inference_list if res.metrics.soft_em])
-    recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
-    precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
-    f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
 
-    accuracy = correct / total if total > 0 else 0.0
-    logger.info(f"Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
-                f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
-    summary = {
-        "total": total,
-        "correct": correct,
-        "accuracy": round(accuracy, 4),
-        "recall": round(recall, 4),
-        "precision": round(precision, 4),
-        "f1": round(f1, 4),
+
+class QADataset(Dataset):
+    def __init__(self, examples):
+        self.examples = examples
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        item = self.examples[idx]
+        return {
+            "idx": idx,                       # 글로벌 원본 인덱스
+            "question": item.question,
+            "ctxs": item.ctxs[10:60],         # exclude top 10 gold
+            "answers": item.answers,
+        }
+
+def collate_fn(batch):
+    return {
+        "idx": [b["idx"] for b in batch],
+        "questions": [b["question"] for b in batch],
+        "contexts_list": [b["ctxs"] for b in batch],
+        "answers": [b["answers"] for b in batch],
     }
 
-    with open(summary_path, 'w') as f:
-        json.dump(summary, f, ensure_ascii=False, indent=4)
-    logger.info(f"Saved inference summary to {summary_path}")
-    with open(all_results_path, 'w') as f:
-        json_results = [asdict(res) for res in inference_list]
-        json.dump(json_results, f, ensure_ascii=False, indent=4)
+def run_inference_ddp(
+    config: DictConfig,
+    model: DISCA,
+    dataset: List[QAExample],
+    rank: int,
+    world_size: int,
+) -> List[InferenceResult]:
+    """각 rank가 자신의 shard만 처리. 결과는 idx와 함께 반환되어 나중에 정렬 가능."""
+    qa_dataset = QADataset(dataset)
+    sampler = DistributedSampler(
+        qa_dataset, num_replicas=world_size, rank=rank,
+        shuffle=False, drop_last=False
+    )
+    dataloader = DataLoader(
+        qa_dataset,
+        batch_size=config.data.batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        num_workers=0,
+    )
+
+    outputs = []
+    pbar = tqdm(
+        dataloader,
+        desc=f"[Rank {rank}] Inference",
+        position=rank,
+    )
+    for batch in pbar:
+        queries = batch["questions"]
+        contexts_list = batch["contexts_list"]
+        gold_answers_list = batch["answers"]
+        global_idxs = batch["idx"]
+
+        batch_answers = model.generate(queries, contexts_list)
+
+        for gidx, query, pred_answer, gold_answers in zip(
+            global_idxs, queries, batch_answers, gold_answers_list
+        ):
+            metrics = compute_metrics(pred_answer, gold_answers)
+            result = InferenceResult(
+                id=gidx,
+                question=query,
+                pred_answer=pred_answer,
+                answers=gold_answers,
+                metrics=metrics,
+            )
+            outputs.append(result)
+    return outputs
+
+def gather_results(local_results, world_size):
+    """모든 rank의 결과를 rank 0으로 모음."""
+    gathered = [None for _ in range(world_size)]
+    dist.all_gather_object(gathered, local_results)
+    if is_main_process():
+        merged = []
+        for chunk in gathered:
+            merged.extend(chunk)
+        # 글로벌 인덱스 기준 정렬해서 원본 데이터 순서 복원
+        merged.sort(key=lambda r: r.id)
+        seen = set()
+        deduped = []
+        for r in merged:
+            if r.id not in seen:
+                seen.add(r.id)
+                deduped.append(r)
+        return deduped
+    return None
 
 
 def main():
     torch.serialization.add_safe_globals([DictConfig, ListConfig, OmegaConf])
     
+    # === DDP setup ===
+    local_rank = setup_ddp()
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
     config = load_config()
     seed_everything(config.seed)
     config.output_dir = os.path.join(config.output_dir, config.experiment_name)
-    setup_logger("main", config.output_dir)
-    logger = logging.getLogger(__name__)
-    logger.info("Configuration Loaded:")
-    logger.info(OmegaConf.to_yaml(config))
+    if is_main_process():
+        setup_logger("main", config.output_dir)
+        logger = logging.getLogger(__name__)
+        logger.info("Configuration Loaded:")
+        logger.info(OmegaConf.to_yaml(config))
+        logger.info(f"DDP world size={world_size}")
+    else:
+        logger = logging.getLogger(__name__)
+        logger.setLevel(logging.WARNING)
 
     # Load model & dataset
     config.caformer.llm_width = 4096  # post-init
-    caformer = MultiHiddenCAFormer(config.caformer).to(dtype=torch.bfloat16)
-    caformer_clf = CAFormerGGClassifier(config, caformer).to(dtype=torch.bfloat16)
+    caformer = MultiHiddenCAFormerForGG(config.caformer).to(
+        device=f"cuda:{local_rank}", dtype=torch.bfloat16)
+    caformer_clf = CAFormerGGClassifier(config, caformer).to(
+        device=f"cuda:{local_rank}", dtype=torch.bfloat16)
     # Load CAFormerGGClassifier weights from the best checkpoint of stage 3
     caformer_clf, load_success = load_checkpoint(caformer_clf, config.caformer.ckpt_path)
 
+    if not load_success:
+        if is_main_process():
+            logger.error("Failed to load model checkpoint. Exiting inference.")
+        cleanup_ddp()
+        return
+
     model = DISCA(config, config.model.model_name, caformer_clf)
 
-    if not load_success:
-        logger.error("Failed to load model checkpoint. Exiting inference.")
-        return
     dataset = load_qa_dataset(config.data.data_path)
-    dataset = dataset[:10]  # For quick testing
+    # dataset = dataset[:10]  # For quick testing
 
     # Do inference on validation set and save results
-    results = run_inference(config, model, dataset)
-    save_results(results, config.output_dir)
+    # results = run_inference(config, model, dataset)
+    local_results = run_inference_ddp(config, model, dataset, rank, world_size)
+    dist.barrier()
+    all_results = gather_results(local_results, world_size)
+
+    if is_main_process():
+        validate_and_save_results(all_results, config.output_dir, logger)
+        logger.info(f"Saved {len(all_results)} results to {config.output_dir}")
+
+    cleanup_ddp()
 
 if __name__ == "__main__":
     main()

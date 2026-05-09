@@ -28,7 +28,8 @@ class DISCA:
         self.__post_init__()
 
     def set_base_chat_template(self, task: str = "qa"):
-        prefix, postfix = template(self.model_name, task, base_template=False)
+        # Use base template for internal answer generation
+        prefix, postfix = template(self.model_name, task, base_template=True)
         self.sys_prompt_ids, self.postfix_ids = self.encode(prefix)[0], self.encode(postfix)[0]
         self.sys_prompt_text = prefix
         self.postfix_text = postfix
@@ -46,7 +47,7 @@ class DISCA:
             "temperature": 1.0,
             "top_p": 1,
             "top_k": None,
-            "max_new_tokens": 32,
+            "max_new_tokens": 512,
             "use_cache": True,
         }
         ### Pad token
@@ -61,13 +62,13 @@ class DISCA:
     def device(self):
         return self.model.device
     
-    def encode(self, text: Union[str, List[str]], return_tokens_only: bool = True, max_len: int = 256, add_special_tokens: bool = False) -> Union[torch.Tensor, BatchEncoding]:
+    def encode(self, text: Union[str, List[str]], return_tokens_only: bool = True, max_len: int = 256) -> Union[torch.Tensor, BatchEncoding]:
         if isinstance(text, str):
             text = [text]
         
         encoded = self.tokenizer(
             text,
-            add_special_tokens=add_special_tokens,
+            add_special_tokens=False,
             return_tensors="pt",
             padding=True,
             truncation=True,
@@ -131,12 +132,11 @@ class DISCA:
         # doclen_list = []
         for i, (q_text, ctx_list) in enumerate(zip(queries, contexts_list)):
             query_text = self.generate_prompt.format(question=q_text) if use_prompt else q_text
-            formatted_query_text = f"\n\nQuestion: {query_text}"
             batch_query_texts.append(query_text)
             # Generate source text
             for ctx in ctx_list:
                 doc_text = f"Title: {ctx.title}\n\n{ctx.text}"
-                source_text = f"{doc_text}{formatted_query_text}"
+                source_text = f"Title: {ctx.title}\n\n{ctx.text}{query_text}"
                 batch_doc_texts.append(doc_text)
                 source_texts.append(source_text)
         
@@ -170,21 +170,28 @@ class DISCA:
 
         return encoded_dict
     
-    def rerank(self, inputs, scores_hat, topk):
+    def rerank(self, inputs, scores_hat, query_hidden_states, topk):
         """
         Args:
             scores_hat: Tensor of shape (B*K, 1)
+            query_hidden_states: Tensor of shape (B*K, M, D_llm)
         Returns:
             reranked_doc_ids: Tensor of shape (B, topk, seq_len)
             reranked_doclen_tensor: Tensor of shape (B, topk)
             reranked_scores_hat: Tensor of shape (B, topk)
+            reranked_query_hidden_states: Tensor of shape (B, topk, M, D_llm)
         """
         B = inputs["question_ids"].shape[0]
         K = inputs["source_ids"].shape[0] // B
 
+        _, M, D_llm = query_hidden_states.shape
         scores_hat = scores_hat.reshape(B, K)
+        query_hidden_states = query_hidden_states.reshape(B, K, M, D_llm)
 
         reranked_scores_hat, reranked_indices = torch.topk(scores_hat, k=topk, dim=1)   # (B, topk)
+        reranked_query_hidden_states = torch.gather(
+            query_hidden_states, dim=1, index=reranked_indices.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, M, D_llm)
+        )      # (B, topk, M, D_llm)
         seq_len = inputs["doc_ids"].size(-1)
         reranked_doc_ids = torch.gather(
             inputs["doc_ids"], dim=1, index=reranked_indices.unsqueeze(-1).expand(-1, -1, seq_len)
@@ -197,71 +204,83 @@ class DISCA:
             "reranked_doc_ids": reranked_doc_ids,
             "reranked_doclen_tensor": reranked_doclen_tensor,
             "reranked_scores_hat": reranked_scores_hat,
+            "reranked_query_hidden_states": reranked_query_hidden_states,
         }
 
         return reranked_dict
     
-    def make_inputs(self, inputs, reranked_dict, use_prompt=True):
+    def make_interleave_inputs(self, inputs, reranked_dict, use_prompt=False, use_caformer_prompt: bool = True):
         B, TOPK, seq_len = reranked_dict["reranked_doc_ids"].shape
         batch_query_texts = inputs["batch_query_texts"]  # (B,)
+        question_embeds = self.model.get_input_embeddings()(inputs["question_ids"]) # (B, L_query, D_llm)
         qlen_tensor = inputs["question_mask"].sum(dim=1)  # (B,)
         reranked_doclen_tensor = reranked_dict["reranked_doclen_tensor"]  # (B, topk)
-        reranked_doc_ids = reranked_dict["reranked_doc_ids"]  # (B, topk, seq_len)
+        reranked_query_hidden_states = reranked_dict["reranked_query_hidden_states"]  # (B, topk, M, D_llm)
 
-        newline_ids = self.encode("\n\n").view(-1).to(self.device)
+        reranked_doc_embeds = self.model.get_input_embeddings()(
+            reranked_dict["reranked_doc_ids"].reshape(-1, seq_len)
+        ).reshape(B, TOPK, seq_len, -1)  # (B, topk, seq_len, D_llm)
 
         if use_prompt:
-            sys_ids = self.sys_prompt_ids.to(self.device)         # (sys_len,)
-            postfix_ids = self.postfix_ids.to(self.device)        # (postfix_len,)
-
-            # Add generation prompt embeddings
-            gen_prompt_encoded = self.encode(batch_query_texts, return_tokens_only=False)
+            # Add system prompt embeddings at the beginning
+            sys_prompt_dummy = f"{self.sys_prompt_text}\n\n"
+            sys_prompt_tokens = self.encode(sys_prompt_dummy).view(-1)
+            sys_embeds = self.model.get_input_embeddings()(sys_prompt_tokens)
+            # Add generation prompt embeddings at the end
+            gen_prompt = [
+                self.generate_prompt.format(question=query)
+                for query in batch_query_texts
+            ]
+            gen_prompt_encoded = self.encode(gen_prompt, return_tokens_only=False)
             gen_prompt_lens = gen_prompt_encoded.attention_mask.sum(dim=1)  # (B,)
-            gen_prompt_ids_full = gen_prompt_encoded.input_ids.to(self.device)  # (B, max_gen_len)
-            gen_ids_list = [gen_prompt_ids_full[i, :gen_prompt_lens[i]] for i in range(B)]
+            gen_embeds_tensor = self.model.get_input_embeddings()(
+                gen_prompt_encoded.input_ids.to(self.device)
+            )
+            gen_embeds = [gen_embeds_tensor[i, :gen_prompt_lens[i]] for i in range(B)]
         else:
-            sys_ids = None
-            postfix_ids = None
-            gen_ids_list = None
+            sys_embeds = None
+            gen_embeds = None
         
-        inputs_ids_list = []
+        inputs_embeds = []
         seq_lengths = []
 
         for i in range(B):
-            b_ids = []
-            # System prompt (prefix)
+            b_inputs_embeds = []
+            # System prompt
             if use_prompt:
-                b_ids.append(sys_ids)
+                b_inputs_embeds.append(sys_embeds)
 
             for j in range(TOPK):
                 each_doclen = reranked_doclen_tensor[i, j]
-                each_doc_ids = reranked_doc_ids[i, j, :each_doclen]
-                b_ids.append(each_doc_ids)
-                b_ids.append(newline_ids)  # Add newline between contexts
+                each_doc_embed = reranked_doc_embeds[i, j, :each_doclen]
+                b_inputs_embeds.append(each_doc_embed)
 
-            b_ids.append(newline_ids)
+                if use_caformer_prompt:
+                    each_query_hidden_states = reranked_query_hidden_states[i, j]
+                    b_inputs_embeds.append(each_query_hidden_states)
             # Generation prompt
             if use_prompt:
-                b_ids.append(gen_ids_list[i])
-                b_ids.append(postfix_ids)
+                sample_gen_embeds = gen_embeds[i]
+                b_inputs_embeds.append(sample_gen_embeds)
             else:
-                sample_question_ids = inputs["question_ids"][i, :qlen_tensor[i]]  # (qlen, D_llm)
-                b_ids.append(sample_question_ids)
+                sample_question_embeds = question_embeds[i, :qlen_tensor[i]]  # (qlen, D_llm)
+                b_inputs_embeds.append(sample_question_embeds)
             
-            b_ids = torch.cat(b_ids, dim=0)
-            inputs_ids_list.append(b_ids)
-            seq_lengths.append(b_ids.shape[0])
+            b_inputs_embeds = torch.cat(b_inputs_embeds, dim=0)
+            inputs_embeds.append(b_inputs_embeds)
+            seq_lengths.append(b_inputs_embeds.shape[0])
         
-        inputs_ids = pad_sequence(inputs_ids_list, batch_first=True, padding_value=self.tokenizer.pad_token_id, padding_side='left')   # (B, max_len)
-        attention_masks = [
-            torch.ones(s, dtype=torch.long, device=inputs_ids.device)
-            for s in seq_lengths
-        ]
-        attention_mask = pad_sequence(attention_masks, batch_first=True, padding_side='left')   # (B, max_len)
-        return inputs_ids, attention_mask
+        inputs_embeds = pad_sequence(inputs_embeds, batch_first=True, padding_side='left')   # (B, max_len, D_llm)
+        max_len = inputs_embeds.shape[1]
+        seq_lengths_tensor = torch.tensor(seq_lengths, device=inputs_embeds.device)
+
+        positions = torch.arange(max_len, device=inputs_embeds.device).unsqueeze(0) # (1, max_len)
+        padding_lengths = max_len - seq_lengths_tensor.unsqueeze(1) # (B, 1)
+        attention_mask = (positions >= padding_lengths).long()  # (B, max_len)
+        return inputs_embeds, attention_mask
 
     @torch.inference_mode()
-    def intervene(self, inputs: Dict[str, Any], use_prompt=True) -> Dict[str, Any]:
+    def intervene(self, inputs: Dict[str, Any], use_prompt=False) -> Dict[str, Any]:
         """
         Intervene on the model's hidden states using CA-Former
         """
@@ -277,18 +296,18 @@ class DISCA:
             return_dict=True
         )
         llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
-        scores_hat, _ = self.caformer_clf(llm_repr, inputs["source_mask"],
-                                        inputs["roberta_question_ids"], inputs["roberta_question_mask"])  # (B*K, 1), (B*K, M, D_llm)
+        scores_hat, query_hidden_states = self.caformer_clf(llm_repr, inputs["source_mask"],
+                                                            inputs["roberta_question_ids"], inputs["roberta_question_mask"])  # (B*K, 1), (B*K, M, D_llm)
         del llm_outputs, llm_repr     # Free up memory
 
         # Reranking
-        reranked_dict = self.rerank(inputs, scores_hat, self.topk)
+        reranked_dict = self.rerank(inputs, scores_hat, query_hidden_states, self.topk)
 
         # Make interleaving inputs for generation
-        inputs_ids, attention_mask = self.make_inputs(inputs, reranked_dict, use_prompt)
+        inputs_embeds, attention_mask = self.make_interleave_inputs(inputs, reranked_dict, use_prompt)
 
         intervened_inputs = {
-            "input_ids": inputs_ids,
+            "inputs_embeds": inputs_embeds,
             "attention_mask": attention_mask,
         }
         return intervened_inputs
@@ -306,23 +325,19 @@ class DISCA:
         if isinstance(queries, str):
             queries = [queries]
 
-        inputs = self.build_inputs(queries, contexts_list, use_prompt=True)
+        inputs = self.build_inputs(queries, contexts_list)
         if do_intervene:
-            inputs = self.intervene(inputs, use_prompt=True)
+            inputs = self.intervene(inputs)
         else:
             inputs = {
-                "input_ids": inputs["input_ids"],
+                "inputs_embeds": self.model.get_input_embeddings()(inputs["input_ids"]),
                 "attention_mask": inputs["attention_mask"],
             }
         # Greedy decoding
         generated_ids = self.model.generate(
-            input_ids=inputs["input_ids"],
+            inputs_embeds=inputs["inputs_embeds"],
             attention_mask=inputs["attention_mask"],
-            pad_token_id=self.tokenizer.pad_token_id,
             **self.gen_kwargs
         )
-        input_len = inputs["input_ids"].shape[1]
-        generated_ids = generated_ids[:, input_len:]
-
         answers = self.decode(generated_ids)
         return answers

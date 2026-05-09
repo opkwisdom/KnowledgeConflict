@@ -7,6 +7,8 @@ from omegaconf import DictConfig
 from pytorch_lightning import LightningDataModule
 from transformers import AutoTokenizer
 from dataclasses import asdict
+from src.prompt import GENERATE_PROMPT
+from src.utils import apply_template
 import logging
 import torch
 import torch.nn.functional as F
@@ -31,6 +33,7 @@ class GGDataset(Dataset):
 
         # Pre-compute table related attributes
         self.use_precompute_table = cfg.data.use_precompute_table
+        self.generation_prompt_template = GENERATE_PROMPT["base"]
 
     def __len__(self):
         return len(self.data)
@@ -41,6 +44,8 @@ class GGDataset(Dataset):
         """
         item = RelevanceQAExample.from_dict(self.data[idx])
         question = item.question
+        generation_prompt = "\n\n" + self.generation_prompt_template.format(question=question)
+
         # reference answer will be used for loss calculation
         # use pseudo answer? richer signal for CA-Former?
         if self.cfg.data.use_pseudo_answer:
@@ -63,6 +68,13 @@ class GGDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False
         )
+        generation_prompt_inputs = self.llm_tokenizer(
+            generation_prompt,
+            truncation=True,
+            max_length=self.cfg.data.max_seq_length,
+            return_tensors="pt",
+            add_special_tokens=False
+        )
         q_len = question_inputs["input_ids"].shape[1]
         a_len = answer_inputs["input_ids"].shape[1]
 
@@ -79,7 +91,8 @@ class GGDataset(Dataset):
         doclen_list = []
         doc_input_ids = []
         source_input_ids = []
-        ctxs = item.ctxs[:self.cfg.data.first_topk]  # First retrieval
+        # ctxs = item.ctxs[:self.cfg.data.first_topk]  # First retrieval
+        ctxs = item.ctxs[10:10+self.cfg.data.first_topk]  # Skip the first 10 passages, which contain golden passages
         for ctx in ctxs:
             ctx_text = f"Title: {ctx.title}\n\n{ctx.text}"
             tokenized_ctx = self.llm_tokenizer(
@@ -103,14 +116,15 @@ class GGDataset(Dataset):
 
         return {
             "idx": item.idx,
-            "doc_input_ids": doc_input_ids,                  # (k, max_seq_length)
+            "doc_input_ids": doc_input_ids,                   # (k, max_seq_length)
             "source_input_ids": source_input_ids,             # (k, max_seq_length)
             "doclen_list": doclen_list,                       # (k,)
             "a_len": a_len,                                   # (1,)   
             "q_len": q_len,
-            "answer_ids": answer_inputs["input_ids"].squeeze(0),                # (a_len,)
-            "question_ids": question_inputs["input_ids"].squeeze(0),                # (q_len,)
-            "roberta_question_ids": roberta_question_inputs["input_ids"].squeeze(0),                # (roberta_q_len,)
+            "generation_prompt_ids": generation_prompt_inputs["input_ids"].squeeze(0),      # (gen_prompt_len,)
+            "answer_ids": answer_inputs["input_ids"].squeeze(0),                            # (a_len,)
+            "question_ids": question_inputs["input_ids"].squeeze(0),                        # (q_len,)
+            "roberta_question_ids": roberta_question_inputs["input_ids"].squeeze(0),        # (roberta_q_len,)
             "roberta_question_mask": roberta_question_inputs["attention_mask"].squeeze(0),  # (roberta_q_len,)
             "scores_oracle": scores_oracle,  # (k,) or None
         }
@@ -139,7 +153,8 @@ class GGDataModule(LightningDataModule):
                 for key in f.keys():
                     # self.oracle_cache[key] = torch.tensor(f[key][score_mode][:], dtype=torch.bfloat16)
                     oracle_scores = f[key]['base_loss'][:] - f[key]['doc_loss'][:]
-                    self.oracle_cache[key] = torch.tensor(oracle_scores[:self.data_cfg.first_topk], dtype=torch.bfloat16)
+                    # Skip the first 10 passages, which contain golden passages, and take the next top-k passages for training
+                    self.oracle_cache[key] = torch.tensor(oracle_scores[10:10+self.data_cfg.first_topk], dtype=torch.bfloat16)
             
         dataset = [asdict(item) for item in tqdm(full_data, desc="Converts to dict")]
         hf_dataset = HFDataset.from_list(dataset)
@@ -214,6 +229,8 @@ class GGDataModule(LightningDataModule):
             # Meta-information which are needed after re-ranking and gen loss calculation
             "doclen_list": torch.tensor([item["doclen_list"] for item in batch]),
             "a_len": torch.tensor([item["a_len"] for item in batch]),
+            # Generation prompt input
+            "generation_prompt_ids": [item["generation_prompt_ids"] for item in batch],
             # Answer input
             "answer_ids": [item["answer_ids"] for item in batch],
             # Question input for gen loss after re-ranking (Not padded)

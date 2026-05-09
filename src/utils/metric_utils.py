@@ -57,7 +57,7 @@ def normalize_answer(s):
 
     def remove_punc(text):
         exclude = set(string.punctuation)
-        return "".join(ch for ch in text if ch not in exclude)
+        return "".join(" " if ch in exclude else ch for ch in text)
 
     def lower(text):
         return text.lower()
@@ -80,8 +80,24 @@ def normalize_answer(s):
         text = pattern.sub(lambda x: word_to_number[x.group()], text)
 
         return text
+    
+    def normalize_range(text):
+        """
+        Convert range expressions to a uniform 'X Y' form.
+        """
+        text = re.sub(r"\bfrom\s+(\S+)\s+to\s+(\S+)", r"\1 \2", text)
+        text = re.sub(r"\bbetween\s+(\S+)\s+and\s+(\S+)", r"\1 \2", text)
+        return text
 
-    return replace_num(white_space_fix(remove_articles(remove_punc(lower(s)))))
+    return replace_num(
+        white_space_fix(
+            normalize_range(
+                remove_articles(
+                    remove_punc(lower(s))
+                )
+            )
+        )
+    )
 
 
 def has_answer(a_pred: str, a_true: List[str], tokenizer=SimpleTokenizer()) -> bool:
@@ -220,6 +236,24 @@ def compute_ndcg(
         ndcg = dcg / idcg if idcg > 0 else 0.0
         ndcg_scores.append(ndcg)
     return ndcg_scores
+
+def compute_recall(
+    preds: np.ndarray,
+    labels: np.ndarray,
+    kvalues: List[int] = [1, 3, 5, 10]
+) -> float:
+    label_ranks = np.argsort(-labels)
+    pred_ranks = np.argsort(-preds)
+    recall_scores = []
+    
+    for k in kvalues:
+        relevant_indices = set(label_ranks[:k].tolist())
+        topk_preds = set(pred_ranks[:k].tolist())
+        retrieved = len(relevant_indices & topk_preds)
+        recall = retrieved / k
+        recall_scores.append(recall)
+    return recall_scores
+
 
 
 if __name__ == "__main__":

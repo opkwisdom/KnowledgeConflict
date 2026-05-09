@@ -1,3 +1,11 @@
+import torch
+
+_original_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
+
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
@@ -5,14 +13,17 @@ from omegaconf import DictConfig, OmegaConf, ListConfig
 from datetime import datetime
 from transformers import AutoModelForCausalLM, AutoModel
 import logging
-import torch
+
 import os
+import typing
 import omegaconf.base
+import collections
 
 from models import MultiHiddenCAFormerForGG, CAFormerGGClassifier, load_model
 from datamodule import GGDataModule
 from lit_modules import GGLightningModule, GenLossClfLightningModule
 from utils import setup_logger, load_config
+
 
 
 
@@ -37,7 +48,10 @@ def load_checkpoint(model, checkpoint_path):
 
 
 def main():
-    torch.serialization.add_safe_globals([DictConfig, ListConfig, OmegaConf, omegaconf.base.ContainerMetadata])
+    torch.serialization.add_safe_globals([
+        DictConfig, ListConfig, OmegaConf, omegaconf.base.ContainerMetadata,
+        typing.Any, dict, collections.defaultdict
+    ])
     # Allow TF32 (This can be useful for mixed precision training)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -45,7 +59,7 @@ def main():
     config = load_config()
     seed_everything(config.seed)
     experiment_name = "stage3_clf_only_train"
-    config.output_dir = os.path.join(config.output_dir, experiment_name, "test")
+    config.output_dir = os.path.join(config.output_dir, experiment_name)
     setup_logger("main", config.output_dir)
     logger = logging.getLogger(__name__)
     logger.info("Configuration Loaded:")
@@ -69,25 +83,23 @@ def main():
     # Callbacks
     from_stage2 = "fromST2" if resume else "Scratch"
     current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    batch_size = config.data.batch_size
+    batch_size = config.data.batch_size * config.train.accumulate_grad_batches
     output_dir = os.path.join(config.output_dir,
                               (f"{config.exp_type}_LR={config.train.learning_rate}"
                                f"_{from_stage2}_BS={batch_size}"
-                               f"_ST={config.train.score_transform}"
-                               f"_CMode={config.caformer.classifier_mode}"
-                               f"_AMode={config.caformer.attention_mode}"
+                               f"_Epochs={config.train.max_epochs}"
                                f"_Pool={config.caformer.pooling_strategy}"
-                               f"_T={config.train.T}_Alpha={config.train.alpha}_time={current_time}"))
-    checkpoint_callback = ModelCheckpoint(
+                               f"_T1={config.train.T1}_Alpha={config.train.alpha}_time={current_time}"))
+    best_checkpoint_callback = ModelCheckpoint(
         monitor='valid/loss',
         dirpath=output_dir,
         filename=f'{config.exp_type}-{{epoch:02d}}-{{step:06d}}-valid_loss={{valid/loss:.4f}}',
-        save_top_k=5,
+        save_top_k=-1,
         mode='min',
-        # every_n_train_steps=5000,
         save_last=True,
         auto_insert_metric_name=False
     )
+    
     lr_monitor = LearningRateMonitor(logging_interval='step')
     name = f"{config.exp_type}_LR={config.train.learning_rate}_BS={batch_size}_freeze={config.train.freeze_pretrained}"
     wandb_logger = WandbLogger(
@@ -107,12 +119,14 @@ def main():
         max_epochs=config.train.max_epochs,
         limit_val_batches=500,    # Limit validation to 500 batches for faster validation
         val_check_interval=0.25,    # Validate every 0.25 epochs
-        callbacks=[checkpoint_callback, lr_monitor],
+        gradient_clip_val=2.0,
+        callbacks=[best_checkpoint_callback, lr_monitor],
         logger=wandb_logger,
         # accumulate_grad_batches=1,
         accumulate_grad_batches=config.train.accumulate_grad_batches,
+        precision="bf16-mixed",
         # enable_progress_bar=(not config.debug_mode),  # Debugging purpose
-        inference_mode=False,
+        inference_mode=True,
     )
 
     ckpt_path = None

@@ -76,7 +76,8 @@ class MultiHiddenCAFormer(nn.Module):
         self.roberta_config = CAFormerConfig.from_pretrained(
             cfg.model_name_or_path,
             query_length=cfg.query_length,
-            llm_width=cfg.llm_width
+            llm_width=cfg.llm_width,
+            is_decoder=cfg.is_decoder
         )
         self.model = RobertaModel.from_pretrained(
             cfg.model_name_or_path,
@@ -155,12 +156,14 @@ class MultiHiddenCAFormer(nn.Module):
 ### Stage 3: Separate classifier query tokens
 class MultiHiddenCAFormerForGG(MultiHiddenCAFormer):
     def __init__(self, cfg: DictConfig):
+        use_causal = getattr(cfg, "use_causal", True)
+        cfg.is_decoder = use_causal
         super().__init__(cfg)
 
         ### Stage 3
         self.classifier_mode = getattr(self.cfg, "classifier_mode", None)
         self.attention_mode = getattr(self.cfg, "attention_mode", None)
-        self.use_causal = getattr(self.cfg, "use_causal", True)
+        self.use_causal = use_causal
 
         self.classifier_query_length = getattr(self.cfg, "classifier_query_length", self.query_length)
         self._init_classifier_query_token_embeds(self.classifier_mode, self.classifier_query_length)
@@ -249,7 +252,7 @@ class MultiHiddenCAFormerForGG(MultiHiddenCAFormer):
         )
         query_embeds = torch.cat([classifier_query_embeds, generation_query_embeds, question_repr_expanded], dim=1)
 
-        llm_hidden_states = llm_hidden_states.to(self.model.device)
+        llm_hidden_states = llm_hidden_states.to(device=self.model.device, dtype=query_embeds.dtype)
         attention_mask = attention_mask.to(self.model.device)
         encoder_attention_mask = encoder_attention_mask.to(self.model.device)
 

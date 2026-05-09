@@ -401,8 +401,10 @@ class RobertaLayer(nn.Module):
         self.add_cross_attention = config.add_cross_attention
         # if self.add_cross_attention and layer_idx % 2 != 0:
         if self.add_cross_attention:
-            if not self.is_decoder:
-                raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
+            if layer_idx == 0:
+                logger.info(f"Adding cross attention to layer {layer_idx} of {config.num_hidden_layers}, is_decoder={config.is_decoder}")
+            # if not self.is_decoder:
+            #     raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
             self.crossattention = RobertaAttention(config, is_cross_attention=True, position_embedding_type="absolute")
         self.intermediate = RobertaIntermediate(config)
         self.output = RobertaOutput(config)

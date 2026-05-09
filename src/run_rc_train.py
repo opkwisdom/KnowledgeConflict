@@ -61,7 +61,7 @@ def main():
     from_stage1 = "fromST1" if resume else "Scratch"
     output_dir = os.path.join(config.output_dir,
                               (f"{config.exp_type}_LR={config.train.learning_rate}"
-                               f"_{from_stage1}_freeze={config.train.freeze_pretrained}"))
+                               f"_{from_stage1}_Causal={config.caformer.use_causal}"))
     checkpoint_callback = ModelCheckpoint(
         monitor='valid/nll_loss',
         dirpath=output_dir,
@@ -83,9 +83,9 @@ def main():
 
     trainer = Trainer(
         accelerator="gpu",
-        devices="auto",
-        # devices=[0],
-        strategy="ddp_find_unused_parameters_true",     # LLM parameters are frozen
+        # devices="auto",
+        devices=[0],
+        # strategy="ddp_find_unused_parameters_true",     # LLM parameters are frozen
         log_every_n_steps=10,   # More frequent logging
         max_epochs=config.train.max_epochs,
         limit_val_batches=500,    # Limit validation to 500 batches for faster validation

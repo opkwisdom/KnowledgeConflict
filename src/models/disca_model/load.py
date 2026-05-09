@@ -56,6 +56,7 @@ def load_model(model_name: str, **kwargs):
         model_id,
         torch_dtype="auto",
         device_map={"": local_rank},
+        # attn_implementation="sdpa"
         attn_implementation="flash_attention_2" if not do_custom_attn else "sdpa"
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id)

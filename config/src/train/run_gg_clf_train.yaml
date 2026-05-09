@@ -8,16 +8,16 @@ data:
   # data_path: data/train/mhqa_train_half_force.jsonl
 
   ### 1/8 dataset
-  name: mhqa
-  data_path: data/train/mhqa_train_subset_force.jsonl
+  # name: mhqa
+  # data_path: data/train/mhqa_train_subset_force.jsonl
 
   ### 50 sample dataset (testing)
   # name: mhqa
   # data_path: data/train/mhqa_train_test.jsonl
 
   ### 1/16 dataset (pilot for hypothesis testing)
-  # name: mhqa
-  # data_path: data/train/mhqa_train_pilot.jsonl
+  name: mhqa
+  data_path: data/train/mhqa_train_pilot.jsonl
 
   max_seq_length: 256
   max_ans_length: 32  # Short answer
@@ -56,10 +56,10 @@ caformer:
   # ckpt_path: None         # From scratch
 
   ### Stage-3
-  classifier_mode: random
-  classifier_query_length: 8
-  attention_mode: block
-  use_causal: True
+  classifier_mode: random   # [random, split_first, kmeans]
+  classifier_query_length: 32
+  attention_mode: block     # [full, block]
+  use_causal: True          # [True, False]
 
 train:
   learning_rate: 2e-5
@@ -76,8 +76,9 @@ train:
   append_question: True
 
   # oracle_mode: marginal   # [whole, marginal, top-1, ..., top-10]
-  score_transform: tanh     # [None, sigmoid, tanh]
-  T: 2.0
+  score_transform:          # [None, sigmoid, tanh]
+  T1: 0.5
+  T2: 1.0
 
   gamma: 1         # guide loss weight
   alpha: 0.8        # rankwise guide loss weight, 0 = don't use

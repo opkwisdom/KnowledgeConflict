@@ -3,14 +3,16 @@ import torch
 import logging
 import re
 import numpy as np
+from src.utils import template
 from torch.nn.utils.rnn import pad_sequence
 from typing import Union
 from pytorch_lightning import LightningModule
+from scipy.stats import spearmanr
 from omegaconf import DictConfig
 from transformers import get_linear_schedule_with_warmup, AutoTokenizer, AutoModelForCausalLM
 
-from utils import compute_metrics, parse_reference_answer, load_h5_scores, compute_ndcg
-from models import load_model, CAFormerGGClassifier, RankwiseGuideLoss, PairwiseRankGuideLoss
+from utils import compute_metrics, parse_reference_answer, load_h5_scores, compute_ndcg, compute_recall
+from models import load_model, CAFormerGGClassifier, RankwiseGuideLoss, PairwiseRankGuideLoss, ListwiseGuideLoss
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +35,24 @@ class GenLossClfLightningModule(LightningModule):
 
         self.score_transform = getattr(cfg, "score_transform", None)
         self.scaling_factor = getattr(cfg, "scaling_factor", 1.0)
-        self.T = getattr(cfg, "T", 1.0)
         # self.pointwise_guide_loss_fn = nn.MSELoss()
         self.pointwise_guide_loss_fn = nn.SmoothL1Loss(reduction='mean')
-        self.rankwise_guide_loss_fn = RankwiseGuideLoss()
+        # self.rankwise_guide_loss_fn = RankwiseGuideLoss()
         # self.rankwise_guide_loss_fn = PairwiseRankGuideLoss()
+        self.rankwise_guide_loss_fn = ListwiseGuideLoss(cfg.T1, cfg.T2)
         self.gen_loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+        self.prefix, self.postfix = template(self.llm.config.model_type, base_template=False)
 
         self.h5_scores = load_h5_scores(self.cfg.precompute_table_path)
         self.val_preds = []
         self.val_labels = []
         self.val_ndcg_scores = []
+        self.val_recall_scores = []
         self.prepare_modules()
+
+    @property
+    def strict_loading(self):
+        return False
 
     def prepare_modules(self):
         # Freeze the pretrained LLM
@@ -53,6 +61,15 @@ class GenLossClfLightningModule(LightningModule):
         
         for param in self.caformer_clf.parameters():
             param.requires_grad = True
+
+        self.prefix_ids = self.llm_tokenizer(
+            self.prefix, return_tensors="pt",
+            add_special_tokens=False
+        )["input_ids"].squeeze(0)
+        self.postfix_ids = self.llm_tokenizer(
+            self.postfix, return_tensors="pt",
+            add_special_tokens=False
+        )["input_ids"].squeeze(0)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -77,7 +94,7 @@ class GenLossClfLightningModule(LightningModule):
         return llm_repr
     
     @torch.inference_mode()
-    def generate_answer(self, batch, top_r_indices):
+    def generate_answer(self, batch, top_r_indices, batch_idx):
         """
         Compute the generation loss conditioned on the interleaving document inputs.
         This is computed using only re-ranked docs(top_r_indices).
@@ -94,49 +111,62 @@ class GenLossClfLightningModule(LightningModule):
         
         # Reshape inputs
         doc_input_ids = batch["doc_input_ids"].reshape(B, K, -1)
-        question_ids = batch["question_ids"]
+        generation_prompt_ids = batch["generation_prompt_ids"]
         answer_ids = batch["answer_ids"]
         a_len_list = batch["a_len"]
+        newline_ids = self.llm_tokenizer(
+            "\n\n", return_tensors="pt", add_special_tokens=False
+        )["input_ids"].squeeze(0).to(doc_input_ids.device)
 
-        input_embeds_list = []
-        labels_list = []
-
+        # input_embeds_list = []
+        input_ids_list = []
         for i in range(B):
             sample_top_r_indices = top_r_indices[i]
             sample_doc_input_ids = doc_input_ids[i]
             sample_doclen_list = doclen_list[i]
-            sample_question_ids = question_ids[i]
+            # sample_question_ids = question_ids[i]
+            sample_generation_prompt_ids = generation_prompt_ids[i]
 
+            # SYSTEM + USER + POSTFIX
             sample_input_ids = []
+            sample_input_ids.append(self.prefix_ids.to(sample_doc_input_ids.device))
             for idx in sample_top_r_indices:
                 doclen = sample_doclen_list[idx]
                 doc_ids = sample_doc_input_ids[idx, :doclen]
                 sample_input_ids.append(doc_ids)
-            
-            sample_input_ids.append(sample_question_ids)
+                sample_input_ids.append(newline_ids)
+            sample_input_ids.append(sample_generation_prompt_ids)
+            sample_input_ids.append(self.postfix_ids.to(sample_doc_input_ids.device))
+
             sample_input_ids = torch.cat(sample_input_ids) # (L,)
-
+            input_ids_list.append(sample_input_ids)
             # Embedding
-            sample_input_embeds = self.llm.get_input_embeddings()(sample_input_ids)   # (L, D)
-            input_embeds_list.append(sample_input_embeds)
-        
-        max_len = max(input_embeds.shape[0] for input_embeds in input_embeds_list)
-        padded_input_embeds = pad_sequence(input_embeds_list, batch_first=True, padding_value=0.0, padding_side='left')
+            # sample_input_embeds = self.llm.get_input_embeddings()(sample_input_ids)   # (L, D)
+            # input_embeds_list.append(sample_input_embeds)
 
-        seq_lens = torch.tensor([input_embeds.shape[0] for input_embeds in input_embeds_list], device=padded_input_embeds.device)
-        mask_range = torch.arange(max_len, device=padded_input_embeds.device).unsqueeze(0)
-        padded_attention_mask = (mask_range < seq_lens.unsqueeze(1)).long()
+        # max_len = max(input_ids.shape[0] for input_ids in input_ids_list)
+        padded_input_ids = pad_sequence(input_ids_list, batch_first=True, padding_value=self.llm_tokenizer.pad_token_id, padding_side='left')
+
+        # seq_lens = torch.tensor([input_ids.shape[0] for input_ids in input_ids_list], device=padded_input_ids.device)
+        # mask_range = torch.arange(max_len, device=padded_input_ids.device).unsqueeze(0)
+        attention_masks = [
+            torch.ones(ids.shape[0], dtype=torch.long, device=ids.device) 
+            for ids in input_ids_list
+        ]
+        padded_attention_mask = pad_sequence(attention_masks, batch_first=True, padding_value=0, padding_side='left')
 
         generated_ids = self.llm.generate(
-            inputs_embeds=padded_input_embeds,
+            input_ids=padded_input_ids,
             attention_mask=padded_attention_mask,
             max_new_tokens=32,
             do_sample=False,
             pad_token_id=self.llm_tokenizer.pad_token_id,
             eos_token_id=self.llm_tokenizer.eos_token_id,
         )
-
-        batch_preds_text = self.llm_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        input_len = padded_input_ids.shape[1]
+        new_token_ids = generated_ids[:, input_len:]
+        
+        batch_preds_text = self.llm_tokenizer.batch_decode(new_token_ids, skip_special_tokens=True)
         batch_refs_text = []
         for i in range(B):
             a_len = a_len_list[i].item()
@@ -144,17 +174,23 @@ class GenLossClfLightningModule(LightningModule):
             ref_text = self.llm_tokenizer.decode(ref_ids, skip_special_tokens=True)
             batch_refs_text.append(ref_text)
 
+        if batch_idx == 0:
+            print("=" * 60)
+            print(f"Input length: {input_len}, Output length: {generated_ids.shape[1]}")
+            print(f"New tokens: {new_token_ids.shape}")
+            
+            # 사람이 읽을 수 있는 형태로 input 확인
+            decoded_input = self.llm_tokenizer.decode(
+                input_ids_list[0], skip_special_tokens=False
+            )
+            print(f"Input (sample 0):\n{decoded_input}")
+            
+            # 생성된 답 확인
+            print(f"Predicted: {batch_preds_text[0]}")
+            print(f"Reference: {batch_refs_text[0]}")
+            print("=" * 60)
+        
         return batch_preds_text, batch_refs_text
-    
-    def transform_scores_oracle(self, scores_oracle):
-        if self.cfg.score_transform is None:
-            return self.scaling_factor * scores_oracle
-        elif self.cfg.score_transform == "sigmoid":
-            return torch.sigmoid(scores_oracle / self.T)
-        elif self.cfg.score_transform == "tanh":
-            return torch.tanh(scores_oracle / self.T)
-        else:
-            raise ValueError(f"Unknown score transform: {self.cfg.score_transform}")
 
     def reranking_documents(self, batch, scores_hat, scores_oracle):
         """
@@ -173,12 +209,15 @@ class GenLossClfLightningModule(LightningModule):
         scores_oracle_np = scores_oracle_reshaped.cpu().float().numpy()
         
         batch_ndcg = []
+        batch_recall = []
         for i in range(B):
             sample_ndcg = compute_ndcg(scores_hat_np[i], scores_oracle_np[i])
+            sample_recall = compute_recall(scores_hat_np[i], scores_oracle_np[i])
             batch_ndcg.append(sample_ndcg)
+            batch_recall.append(sample_recall)
 
         topr_indices = topk_student_indices[:, :self.top_r]
-        return topr_indices, batch_ndcg
+        return topr_indices, batch_ndcg, batch_recall
 
     def training_step(self, batch, batch_idx):
         llm_repr = self.forward(batch)
@@ -188,10 +227,9 @@ class GenLossClfLightningModule(LightningModule):
 
         raw_scores_oracle = batch["scores_oracle"].reshape(-1, 1)   # (B*K, 1)
         scores_oracle = raw_scores_oracle.to(scores_hat.device)
-        scores_oracle = self.transform_scores_oracle(scores_oracle)
 
         # Guide loss (Pointwise + Rankwise)
-        scores_hat = scores_hat.view(-1)
+        scores_hat = scores_hat.view(-1).to(scores_oracle.dtype)
         scores_oracle = scores_oracle.view(-1)
         raw_pointwise_guide_loss = self.pointwise_guide_loss_fn(scores_hat, scores_oracle)
         B, K = batch["doclen_list"].shape
@@ -205,6 +243,28 @@ class GenLossClfLightningModule(LightningModule):
         self.log("train/rankwise_guide_loss", raw_rankwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("train/loss", loss, on_step=True, on_epoch=True, sync_dist=True)
 
+        # Debugging logs every 10 steps
+        accumulate = self.trainer.accumulate_grad_batches
+        if batch_idx % (10 * accumulate) == 0:
+            pred_per_query = scores_hat.reshape(B, K).detach().cpu().float().numpy()
+            oracle_per_query = scores_oracle.reshape(B, K).detach().cpu().float().numpy()
+            rhos = []
+            for i in range(B):
+                rho, _ = spearmanr(pred_per_query[i], oracle_per_query[i])
+                if not np.isnan(rho):
+                    rhos.append(rho)
+            avg_rho = np.mean(rhos) if rhos else 0.0
+
+            logger.info(f"Step {self.global_step}:")
+            logger.info(f"  pred_scores std: {scores_hat.reshape(B, K).std(dim=-1).mean().item():.4f}")
+            logger.info(f"  pred_scores range: [{scores_hat.min().item():.4f}, {scores_hat.max().item():.4f}]")
+            logger.info(f"  oracle_scores std: {scores_oracle.reshape(B, K).std(dim=-1).mean().item():.4f}")
+            logger.info(f"  oracle_scores range: [{scores_oracle.min().item():.4f}, {scores_oracle.max().item():.4f}]")
+            logger.info(f"  Spearman's rho (pred vs oracle): {avg_rho:.4f}")
+            logger.info(f"  loss: {loss.item():.4f}")
+
+            self.log("train/spearman_rho", avg_rho, on_step=True, on_epoch=False, sync_dist=True)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -216,10 +276,9 @@ class GenLossClfLightningModule(LightningModule):
         # Compute the gradient of the oracle loss and target score
         raw_scores_oracle = batch["scores_oracle"].reshape(-1, 1)   # (B*K, 1)
         scores_oracle = raw_scores_oracle.to(scores_hat.device)
-        scores_oracle = self.transform_scores_oracle(scores_oracle)
 
         # Guide loss (Pointwise + Rankwise)
-        scores_hat = scores_hat.view(-1)
+        scores_hat = scores_hat.view(-1).to(scores_oracle.dtype)
         scores_oracle = scores_oracle.view(-1)
         raw_pointwise_guide_loss = self.pointwise_guide_loss_fn(scores_hat, scores_oracle)
         B, K = batch["doclen_list"].shape
@@ -230,11 +289,12 @@ class GenLossClfLightningModule(LightningModule):
         loss = pointwise_guide_loss + rankwise_guide_loss
         
         # TODO: Re-ranking, select Top-R
-        top_r_indices, batch_ndcg = self.reranking_documents(batch, scores_hat, raw_scores_oracle)
+        top_r_indices, batch_ndcg, batch_recall = self.reranking_documents(batch, scores_hat, raw_scores_oracle)
         self.val_ndcg_scores.extend(batch_ndcg)
+        self.val_recall_scores.extend(batch_recall)
 
         # Generation quality evaluation
-        batch_preds, batch_labels = self.generate_answer(batch, top_r_indices)
+        batch_preds, batch_labels = self.generate_answer(batch, top_r_indices, batch_idx)
         self.val_preds.extend(batch_preds)
         self.val_labels.extend(batch_labels)
 
@@ -243,12 +303,7 @@ class GenLossClfLightningModule(LightningModule):
         self.log("valid/rankwise_guide_loss", raw_rankwise_guide_loss, on_step=True, on_epoch=True, sync_dist=True)
         self.log("valid/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
 
-
-    def parse_final_answer(self, text: str) -> str:
-        match = re.search(r'Final Answer:\s*(.*)', text, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-        return ""
+        return loss
 
     def on_validation_epoch_end(self):
         total_em = 0.0
@@ -269,6 +324,8 @@ class GenLossClfLightningModule(LightningModule):
         # Compute average NDCG
         np_ndcg = np.array(self.val_ndcg_scores)
         avg_ndcg = np.mean(np_ndcg, axis=0)
+        np_recall = np.array(self.val_recall_scores)
+        avg_recall = np.mean(np_recall, axis=0)
 
         self.log("valid/EM", avg_em, sync_dist=True)
         self.log("valid/F1", avg_f1, sync_dist=True)
@@ -276,10 +333,15 @@ class GenLossClfLightningModule(LightningModule):
         self.log("valid/NDCG@3", avg_ndcg[1], sync_dist=True)
         self.log("valid/NDCG@5", avg_ndcg[2], sync_dist=True)
         self.log("valid/NDCG@10", avg_ndcg[3], sync_dist=True)
+        self.log("valid/Recall@1", avg_recall[0], sync_dist=True)
+        self.log("valid/Recall@3", avg_recall[1], sync_dist=True)
+        self.log("valid/Recall@5", avg_recall[2], sync_dist=True)
+        self.log("valid/Recall@10", avg_recall[3], sync_dist=True)
 
         self.val_preds.clear()
         self.val_labels.clear()
         self.val_ndcg_scores.clear()
+        self.val_recall_scores.clear()
         
     def on_save_checkpoint(self, checkpoint):
         # save only CAFormer classifier weights
@@ -304,7 +366,7 @@ class GenLossClfLightningModule(LightningModule):
             {"params": caformer_params, "lr": self.learning_rate},
             {"params": classifier_params, "lr": 1e-3}
         ]
-        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, fused=True)
+        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, fused=False)
 
         # optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate, fused=True)
         total_steps = self.trainer.estimated_stepping_batches
@@ -323,3 +385,19 @@ class GenLossClfLightningModule(LightningModule):
                 "frequency": 1,
             },
         }
+    
+    # Debugging: Log gradient norms of CAFormer and classifier every 10 steps
+    def on_after_backward(self):
+        if self.global_step % 10 == 0:
+            caformer_grad_norm = self._compute_grad_norm(self.caformer_clf.caformer)
+            classifier_grad_norm = self._compute_grad_norm(self.caformer_clf.classifier)
+            
+            self.log("train/caformer_grad_norm", caformer_grad_norm, on_step=True)
+            self.log("train/classifier_grad_norm", classifier_grad_norm, on_step=True)
+
+    def _compute_grad_norm(self, module):
+        total_norm_sq = 0.0
+        for p in module.parameters():
+            if p.grad is not None:
+                total_norm_sq += p.grad.data.norm(2).item() ** 2
+        return total_norm_sq ** 0.5
