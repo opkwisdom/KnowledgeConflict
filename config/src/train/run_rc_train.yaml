@@ -32,6 +32,7 @@ caformer:
   # ckpt_dir: /workspaces/kvzip_nlplab/checkpoint/stage1_ctr_train/multi_LR=0.0001_M-W=0.1_freeze=True/multi-epoch=00-valid
   ckpt_dir:
   use_causal: False
+  is_decoder: False
 
 train:
   learning_rate: 1e-4
@@ -44,10 +45,6 @@ train:
 
 seed: 42
 debug_mode: False  # Only activate when debugging
-
-self_task_prompt_name: base
-generate_prompt_name: base
-base_prompt_name: pure-llm-brief-2
 
 output_dir: /workspaces/kvzip_nlplab/checkpoint
 project_name: caformer

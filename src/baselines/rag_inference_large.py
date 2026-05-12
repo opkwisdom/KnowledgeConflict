@@ -12,15 +12,15 @@ import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, load_qa_dataset, has_answer, compute_metrics, MetricResult,
+    load_config, setup_logger, load_qa_dataset, compute_metrics,
     apply_template,
     RelevanceQAExample, QAExample, CtxExample,
     InferenceResult,
 )
 
 # Popular cross-encoder
-RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"    # 22M
-# RERANKER_MODEL_NAME = "BAAI/bge-reranker-base"                  # 280M
+# RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"    # 22M
+RERANKER_MODEL_NAME = "BAAI/bge-reranker-base"                  # 280M
 
 
 
@@ -96,7 +96,6 @@ def run_baseline_inference(
         )
         query_text = generate_prompt.format(question=item.question)
         input_text = apply_template(query_text, context, config.model.model_name)
-
         input_ids = tokenizer.encode(input_text, return_tensors='pt', add_special_tokens=False).to(model.device)
         attention_mask = torch.ones_like(input_ids).to(model.device)
         outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
@@ -191,7 +190,7 @@ def main():
     if reranker_model is not None:
         reranker_model.to('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Reranker model {RERANKER_MODEL_NAME} initialized.")
-    
+
     inference_results = run_baseline_inference(config, model, tokenizer, data, reranker_model, logger)
     validate_and_save_results(inference_results, config.output_dir, logger)
 

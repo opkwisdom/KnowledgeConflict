@@ -39,7 +39,7 @@ class GenLossClfLightningModule(LightningModule):
         self.pointwise_guide_loss_fn = nn.SmoothL1Loss(reduction='mean')
         # self.rankwise_guide_loss_fn = RankwiseGuideLoss()
         # self.rankwise_guide_loss_fn = PairwiseRankGuideLoss()
-        self.rankwise_guide_loss_fn = ListwiseGuideLoss(cfg.T1, cfg.T2)
+        self.rankwise_guide_loss_fn = ListwiseGuideLoss(cfg.T1)
         self.gen_loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
         self.prefix, self.postfix = template(self.llm.config.model_type, base_template=False)
 
@@ -222,7 +222,7 @@ class GenLossClfLightningModule(LightningModule):
     def training_step(self, batch, batch_idx):
         llm_repr = self.forward(batch)
         scores_hat, _ = self.caformer_clf(llm_repr, batch["source_attention_mask"],
-                                                            batch["roberta_question_ids"], batch["roberta_question_mask"])
+                                        batch["roberta_question_ids"], batch["roberta_question_mask"])
         del llm_repr
 
         raw_scores_oracle = batch["scores_oracle"].reshape(-1, 1)   # (B*K, 1)

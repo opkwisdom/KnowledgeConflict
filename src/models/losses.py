@@ -119,10 +119,9 @@ class RankwiseGuideLoss(torch.nn.Module):
     
 
 class ListwiseGuideLoss(torch.nn.Module):
-    def __init__(self, T1: float, T2: float):
+    def __init__(self, T: float):
         super().__init__()
-        self.T1 = T1
-        self.T2 = T2
+        self.T = T
     
     def forward(self, input_scores: torch.FloatTensor, target_scores: torch.FloatTensor):
         """
@@ -135,11 +134,11 @@ class ListwiseGuideLoss(torch.nn.Module):
         input_scores = input_scores.float()
         target_scores = target_scores.float()
 
-        target_log_prob = torch.log_softmax(target_scores / self.T1, dim=-1)  # (B, K)
+        target_log_prob = torch.log_softmax(target_scores / self.T, dim=-1)  # (B, K)
         target_prob = target_log_prob.exp().detach()
 
-        input_log_prob = torch.log_softmax(input_scores / self.T2, dim=-1)  # (B, K)
-        loss = -(target_prob * input_log_prob).sum(dim=-1).mean()   # KL divergence
+        input_log_prob = torch.log_softmax(input_scores / self.T, dim=-1)  # (B, K)
+        loss = -(self.T ** 2) * (target_prob * input_log_prob).sum(dim=-1).mean()   # KL divergence
         return loss
     
 

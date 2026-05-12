@@ -1,10 +1,10 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 export PYTHONPATH=$PWD:$PYTHONPATH
 
 # Iterate Map
-declare -A DATA_MAP
+# declare -A DATA_MAP
 # DATA_MAP["triviaqa"]="validation"
 # DATA_MAP["truthfulqa"]="validation"
 # DATA_MAP["webqa"]="test"
@@ -19,6 +19,7 @@ declare -A DATA_MAP
 python3 src/baselines/pure_inference.py \
     --config config/src/baselines/pure_llm.yaml \
     data.name=hotpotqa-w \
-    data.data_path=data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl
+    data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl
+    # data.data_path=data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl
     # data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl
     

@@ -1,11 +1,12 @@
 from torch.utils.data import Dataset, DataLoader
-from datasets import Dataset as HFDataset   # Prevent OOM
+from datasets import Dataset as HFDataset, load_from_disk   # Prevent OOM
 from typing import List, Optional
 from omegaconf import DictConfig
 from pytorch_lightning import LightningDataModule
 from transformers import AutoTokenizer
 import logging
 import torch
+import os
 
 from utils import load_collection
 
@@ -51,9 +52,18 @@ class RCDataModule(LightningDataModule):
         self.batch_size = self.data_cfg.batch_size
         self.num_workers = self.data_cfg.num_workers
     
+    def prepare_data(self):
+        cache_path = f"{self.data_cfg.data_path}_hf_cache"
+        if not os.path.exists(cache_path):
+            full_data = load_collection(self.data_cfg.data_path)
+            hf_dataset = HFDataset.from_list(full_data)
+            hf_dataset.save_to_disk(cache_path)
+    
     def setup(self, stage: Optional[str] = None):
-        full_data = load_collection(self.data_cfg.data_path)
-        hf_dataset = HFDataset.from_list(full_data)
+        # full_data = load_collection(self.data_cfg.data_path)
+        # hf_dataset = HFDataset.from_list(full_data)
+        cache_path = f"{self.data_cfg.data_path}_hf_cache"
+        hf_dataset = load_from_disk(cache_path)
         split_dataset = hf_dataset.train_test_split(test_size=self.data_cfg.test_size, seed=self.data_cfg.seed)
         if stage == 'fit' or stage is None:
             self.train_dataset = RCDataset(split_dataset["train"], self.cfg)

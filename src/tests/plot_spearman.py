@@ -25,8 +25,8 @@ def plot_spearman(data, output_path):
 
 def main():
     # test_type, do_vllm = sys.argv[1], bool(sys.argv[2])
-    input_path = f"results/ret_vs_gen/retrieval_vs_generation_results.json"
-    output_path = f"results/ret_vs_gen/spearman_plot.png"
+    input_path = f"results/ret_vs_gen/sys_retrieval_vs_generation_results.json"
+    output_path = f"results/ret_vs_gen/sys_spearman_plot.png"
 
     with open(input_path, "r") as f:
         data = json.load(f)

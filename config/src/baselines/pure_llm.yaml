@@ -13,7 +13,7 @@ model:
     top_k: null
     max_new_tokens: 32
 
-generate_prompt_name: pure-llm-brief-2
+generate_prompt_name: pure-llm
 output_dir: results/pure
 task: base
 run_baseline: True

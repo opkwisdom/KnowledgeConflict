@@ -15,6 +15,8 @@ from transformers import AutoModelForCausalLM, AutoModel
 import logging
 
 import os
+import re
+import glob
 import typing
 import omegaconf.base
 import collections
@@ -27,15 +29,30 @@ from utils import setup_logger, load_config
 
 
 
-def load_checkpoint(model, checkpoint_path):
+def load_checkpoint(model, checkpoint_dir):
     logger = logging.getLogger(__name__)
-
-    if not os.path.exists(checkpoint_path):
-        logger.info(f"Checkpoint not found at {checkpoint_path}. Skipping checkpoint loading.")
+    if checkpoint_dir is None:
+        logger.info(f"No checkpoint path specified.")
         return model, False
-    logger.info(f"Loading CAFormer weights from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
+    
+    ckpt_files = glob.glob(os.path.join(checkpoint_dir, "*.ckpt"))
+    if not ckpt_files:
+        logger.info(f"No checkpoint path specified.")
+        return model, False
+    
+    pattern = re.compile(r'valid_nll_loss=(-?\d+\.?\d*)')
+    candidates = []
+    for path in ckpt_files:
+        filename = os.path.basename(path)
+        match = pattern.search(filename)
+        if match:
+            value = float(match.group(1))
+            candidates.append((value, path))
+            
+    best = min(candidates, key=lambda x: x[0])
+    logger.info(f"Loading CAFormer checkpoint from {best[1]}...")
+    checkpoint = torch.load(best[1], map_location="cpu", weights_only=False)
+    
     cleaned_state_dict = {}
     for key, value in checkpoint["state_dict"].items():
         if key.startswith("caformer."):
@@ -44,6 +61,7 @@ def load_checkpoint(model, checkpoint_path):
     missing_keys, unexpected_keys = model.load_state_dict(cleaned_state_dict, strict=False)
     logger.info(f"Missing keys: {missing_keys}")
     logger.info(f"Unexpected keys: {unexpected_keys}")
+    
     return model, True
 
 
@@ -72,7 +90,7 @@ def main():
     config.caformer.llm_width = llm.config.hidden_size  # post-init
     caformer = MultiHiddenCAFormerForGG(config.caformer).to(dtype=torch.bfloat16)
     # Load CAFormer weights from the best checkpoint of stage 2
-    caformer, resume = load_checkpoint(caformer, config.caformer.ckpt_path)
+    caformer, resume = load_checkpoint(caformer, config.caformer.ckpt_dir)
     caformer_clf = CAFormerGGClassifier(config, caformer).to(dtype=torch.bfloat16)
 
     config.train.max_interleaving_len = config.data.topk_per_query * (config.data.max_seq_length + config.caformer.query_length) \
@@ -100,6 +118,7 @@ def main():
         auto_insert_metric_name=False
     )
     
+    world_size = torch.cuda.device_count()
     lr_monitor = LearningRateMonitor(logging_interval='step')
     name = f"{config.exp_type}_LR={config.train.learning_rate}_BS={batch_size}_freeze={config.train.freeze_pretrained}"
     wandb_logger = WandbLogger(
@@ -117,7 +136,7 @@ def main():
         strategy="ddp_find_unused_parameters_true",     # LLM parameters are frozen
         log_every_n_steps=5,   # More frequent logging
         max_epochs=config.train.max_epochs,
-        limit_val_batches=500,    # Limit validation to 500 batches for faster validation
+        limit_val_batches=int(500 / world_size),    # Limit validation to 500 batches for faster validation
         val_check_interval=0.25,    # Validate every 0.25 epochs
         gradient_clip_val=2.0,
         callbacks=[best_checkpoint_callback, lr_monitor],

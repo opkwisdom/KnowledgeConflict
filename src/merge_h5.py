@@ -2,7 +2,7 @@ import h5py
 import os
 
 def merge_h5_files(input_dir: str, output_file: str):
-    subdirs = ["short_post_out_0", "short_post_out_1", "short_post_out_2", "short_post_out_3"]
+    subdirs = ["sys_short_out_0", "sys_short_out_1", "sys_short_out_2", "sys_short_out_3"]
     with h5py.File(output_file, 'w') as merged_h5:
         for subdir in subdirs:
             subdir_path = os.path.join(input_dir, subdir)
@@ -23,7 +23,7 @@ def merge_h5_files(input_dir: str, output_file: str):
 
 def main():
     input_dir = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama"
-    output_file = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_short_post_loss_precompute_table.h5"
+    output_file = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/sys_short_loss_half_precompute_table.h5"
     merge_h5_files(input_dir, output_file)
 
 

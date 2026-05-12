@@ -11,103 +11,34 @@ import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, load_qa_dataset, compute_metrics, has_answer, MetricResult,
+    load_config, setup_logger, load_qa_dataset, compute_metrics, has_answer, validate_and_save_results,
     apply_template,
     RelevanceQAExample, CtxExample, QAExample,
     InferenceResult,
 )
 
-def construct_context(
-    ctxs: List[CtxExample],
-    relevance_map: Dict[int, str],
-    use_single_context: bool = True,
-) -> Tuple[str, str]:
-    if not ctxs:
-        return ""
-    elif use_single_context:
-        target_ctx = ctxs[0]
-        context = f"Title: {target_ctx.title}\n\n{target_ctx.text}"
-        return context, relevance_map[0]
-    else:
-        contexts = []
-        for ctx in ctxs:
-            contexts.append(f"Title: {ctx.title}\n\n{ctx.text}")
-        return "\n\n".join(contexts), "multiple"
-
-def run_inference(
-    config: DictConfig,
-    model: AutoModelForCausalLM,
-    tokenizer: AutoTokenizer,
-    data: List[RelevanceQAExample],
-    logger,
-) -> Dict[str, List[InferenceResult]]:
-    logger.info("Starting RAG Inference (for Analysis)...")
-    inference_cases = ["param_true", "param_positive", "param_negative", "param_irrelevant", "param_multiple"]
-    results = {infer_case: [] for infer_case in inference_cases}
-    generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
-
-    for idx, item in tqdm(enumerate(data), desc="Running RAG Inference", total=len(data)):
-        a_internal = item.parametric_answer
-        # is_correct = check_answer(a_internal, item.answers)
-        # Case 1 - Internal answer is correct
-        if is_correct:
-            sample_result = InferenceResult(
-                id=idx,
-                question=item.question,
-                pred_answer=a_internal,
-                answers=item.answers,
-                is_correct=is_correct,
-            )
-            results["param_true"].append(sample_result)
-            continue
-        relevance_map = item.ctx_relevance.mapping
-        context, rel_type = construct_context(item.ctxs, relevance_map, config.data.use_single_context)
-
-        query_text = generate_prompt.format(question=item.question)
-        input_text = apply_template(query_text, None, config.model.model_name)
-
-        input_ids = tokenizer.encode(input_text, return_tensors='pt').to(model.device)
-        attention_mask = torch.ones_like(input_ids).to(model.device)
-        outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
-
-        # Decode generated answer
-        gen_ids = outputs[:, input_ids.shape[1]:-1]
-        pred_answer = tokenizer.decode(gen_ids[0])
-
-        is_correct = has_answer(pred_answer, item.answers)
-        
-        # Construct result
-        sample_result = InferenceResult(
-            id=idx,
-            question=item.question,
-            pred_answer=pred_answer,
-            answers=item.answers,
-            is_correct=is_correct,
-        )
-        results[f"param_{rel_type}"].append(sample_result)
-    return results
-
 def run_baseline_inference(
     config: DictConfig,
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
-    data: Union[List[RelevanceQAExample], List[QAExample]],
+    data: List[QAExample],
     logger,
 ) -> List[InferenceResult]:
-    logger.info("Starting RAG Baseline Inference...")
+    logger.info("Starting Pure Baseline Inference...")
     results = []
     generate_prompt = GENERATE_PROMPT[config.generate_prompt_name]
 
     for idx, item in tqdm(enumerate(data), desc="Running Pure Inference", total=len(data)):
         query_text = generate_prompt.format(question=item.question)
         input_text = apply_template(query_text, None, config.model.model_name, base_template=True)
-        input_ids = tokenizer.encode(input_text, return_tensors='pt').to(model.device)
+        input_ids = tokenizer.encode(input_text, return_tensors='pt', add_special_tokens=False).to(model.device)
         attention_mask = torch.ones_like(input_ids).to(model.device)
         outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
 
         # Decode generated answer
-        gen_ids = outputs[:, input_ids.shape[1]:-1]
-        pred_answer = tokenizer.decode(gen_ids[0])
+        input_len = input_ids.shape[1]
+        gen_ids = outputs[:, input_len:]
+        pred_answer = tokenizer.decode(gen_ids[0], skip_special_tokens=True).strip()
 
         answers = item.answers
         if isinstance(answers, dict):
@@ -126,57 +57,21 @@ def run_baseline_inference(
         results.append(sample_result)
     return results
 
-def validate_and_save_results(
-    inference_list: Dict[str, List[InferenceResult]],
-    output_dir: str,
-    logger: logging.Logger,
-) -> None:
-    summary_path = f"{output_dir}/inference_summary.txt"
-    all_results_path = f"{output_dir}/inference_results.json"
-
-    total = len(inference_list)
-    correct = sum([1 for res in inference_list if res.metrics.soft_em])
-    recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
-    precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
-    f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
-
-    accuracy = correct / total if total > 0 else 0.0
-    logger.info(f"Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
-                f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
-    summary = {
-        "total": total,
-        "correct": correct,
-        "accuracy": round(accuracy, 4),
-        "recall": round(recall, 4),
-        "precision": round(precision, 4),
-        "f1": round(f1, 4),
-    }
-    
-    with open(summary_path, 'w') as f:
-        json.dump(summary, f, ensure_ascii=False, indent=4)
-    logger.info(f"Saved inference summary to {summary_path}")
-    with open(all_results_path, 'w') as f:
-        json_results = [asdict(res) for res in inference_list]
-        json.dump(json_results, f, ensure_ascii=False, indent=4)
-
 
 def main():
     config = load_config()
     cur_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     experiment_name = f"prompt={config.generate_prompt_name}"
-    output_dir = os.path.join(config.output_dir, config.data.name)  # Use data name from config
-    config.output_dir = os.path.join(output_dir, experiment_name, cur_time)
+    output_dir = os.path.join(config.output_dir, config.model.model_name.split('/')[-1], config.data.name)  # Use data name from config
+    config.output_dir = os.path.join(output_dir, experiment_name)
 
-    setup_logger(f"rag_inference_{cur_time}", config.output_dir)
+    setup_logger(f"pure_inference_{cur_time}", config.output_dir)
     logger = logging.getLogger(__name__)
     logger.info("Configuration Loaded:")
     logger.info(OmegaConf.to_yaml(config))
 
     # Load data
-    # if "nq" in config.data.data_path:
-    #     data = load_relevance_dataset(config.data.data_path)
-    # else:
     data = load_qa_dataset(config.data.data_path)
     # data = data[:50]
     
@@ -190,10 +85,7 @@ def main():
     logger.info(f"Model {config.model.model_name} initialized.")
 
     # Inference
-    if config.run_baseline:
-        inference_results = run_baseline_inference(config, model, tokenizer, data, logger)
-    else:
-        inference_results = run_inference(config, model, tokenizer, data, logger)
+    inference_results = run_baseline_inference(config, model, tokenizer, data, logger)
     validate_and_save_results(inference_results, config.output_dir, logger)
 
 if __name__ == "__main__":

@@ -91,13 +91,14 @@ def run_test_oracle_inference(
         query_text = generate_prompt.format(question=item.question)
         input_text = apply_template(query_text, context, config.model.model_name)
 
-        input_ids = tokenizer.encode(input_text, return_tensors='pt').to(model.device)
+        input_ids = tokenizer.encode(input_text, return_tensors='pt', add_special_tokens=False).to(model.device)
         attention_mask = torch.ones_like(input_ids).to(model.device)
         outputs = model.generate(input_ids, attention_mask=attention_mask, pad_token_id=tokenizer.pad_token_id, **config.model.gen_kwargs)
 
         # Decode generated answer
-        gen_ids = outputs[:, input_ids.shape[1]:-1]
-        pred_answer = tokenizer.decode(gen_ids[0])
+        input_len = input_ids.shape[1]
+        gen_ids = outputs[:, input_len:]
+        pred_answer = tokenizer.decode(gen_ids[0], skip_special_tokens=True).strip()
 
         answers = item.answers
         if isinstance(answers, dict):
@@ -119,9 +120,9 @@ def main():
     config = load_config()
     cur_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    experiment_name = f"prompt={config.generate_prompt_name}"
+    # experiment_name = f"prompt={config.generate_prompt_name}"
     output_dir = os.path.join(config.output_dir, config.data.name)  # Use data name from config
-    config.output_dir = os.path.join(output_dir, experiment_name, cur_time)
+    config.output_dir = os.path.join(output_dir, config.experiment_name)
     
     setup_logger(f"oracle_loss_test_inference_{cur_time}", config.output_dir)
     logger = logging.getLogger(__name__)

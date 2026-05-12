@@ -81,20 +81,18 @@ def normalize_answer(s):
 
         return text
     
-    def normalize_range(text):
-        """
-        Convert range expressions to a uniform 'X Y' form.
-        """
-        text = re.sub(r"\bfrom\s+(\S+)\s+to\s+(\S+)", r"\1 \2", text)
-        text = re.sub(r"\bbetween\s+(\S+)\s+and\s+(\S+)", r"\1 \2", text)
-        return text
+    # def normalize_range(text):
+    #     """
+    #     Convert range expressions to a uniform 'X Y' form.
+    #     """
+    #     text = re.sub(r"\bfrom\s+(\S+)\s+to\s+(\S+)", r"\1 \2", text)
+    #     text = re.sub(r"\bbetween\s+(\S+)\s+and\s+(\S+)", r"\1 \2", text)
+    #     return text
 
     return replace_num(
         white_space_fix(
-            normalize_range(
-                remove_articles(
-                    remove_punc(lower(s))
-                )
+            remove_articles(
+                remove_punc(lower(s))
             )
         )
     )

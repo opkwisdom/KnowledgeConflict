@@ -1,16 +1,26 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=3
 export PYTHONPATH=$PWD/src:$PYTHONPATH
 
 # echo "Sleep for 1h to wait for the precompute tables to be generated..."
 # sleep 1h
 
 # ORACLE_MODE=base
+# echo "Sleep for 1h 10m"
+# sleep 1h 10m
 python3 src/tests/oracle_loss_gen_test.py \
     --config config/src/tests/oracle_loss_gen_test.yaml \
     data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl \
-    data.precompute_table_path=/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_val_whole_short_loss_precompute_table.h5
+    data.precompute_table_path="/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_sys_val_whole_short_loss_precompute_table.h5" \
+    experiment_name=Sys_5000
+
+python3 src/tests/oracle_loss_gen_test.py \
+    --config config/src/tests/oracle_loss_gen_test.yaml \
+    data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl \
+    data.precompute_table_path=/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_val_whole_short_loss_precompute_table.h5 \
+    experiment_name=No_Sys_5000
+    
 
 # TOPK_PER_QUERIES=(100 50 30 20)
 # for TOPK in "${TOPK_PER_QUERIES[@]}"; do

@@ -8,6 +8,8 @@ import torch.distributed as dist
 import logging
 import torch
 import os
+import re
+import glob
 import json
 
 from models import MultiHiddenCAFormerForGG, CAFormerGGClassifier, DISCA, load_model
@@ -31,15 +33,30 @@ def is_main_process():
     return (not dist.is_initialized()) or dist.get_rank() == 0
 
 
-def load_checkpoint(model: CAFormerGGClassifier, checkpoint_path):
+def load_checkpoint(model: CAFormerGGClassifier, checkpoint_dir):
     logger = logging.getLogger(__name__)
-
-    if not os.path.exists(checkpoint_path):
-        logger.info(f"Checkpoint not found at {checkpoint_path}. Skipping checkpoint loading.")
+    if checkpoint_dir is None:
+        logger.info(f"No checkpoint path specified.")
         return model, False
-    logger.info(f"Loading CAFormerGGClassifier weights from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
+    ckpt_files = glob.glob(os.path.join(checkpoint_dir, "*.ckpt"))
+    if not ckpt_files:
+        logger.info(f"No checkpoint path specified.")
+        return model, False
+    
+    pattern = re.compile(r'valid_loss=(-?\d+\.?\d*)')
+    candidates = []
+    for path in ckpt_files:
+        filename = os.path.basename(path)
+        match = pattern.search(filename)
+        if match:
+            value = float(match.group(1))
+            candidates.append((value, path))
+
+    best = min(candidates, key=lambda x: x[0])
+    logger.info(f"Loading CAFormer checkpoint from {best[1]}...")
+    checkpoint = torch.load(best[1], map_location="cpu", weights_only=False)
+    
     cleaned_state_dict = {}
     for key, value in checkpoint["state_dict"].items():
         if key.startswith("caformer_clf."):
@@ -48,6 +65,7 @@ def load_checkpoint(model: CAFormerGGClassifier, checkpoint_path):
     missing_keys, unexpected_keys = model.load_state_dict(cleaned_state_dict, strict=False)
     logger.info(f"Missing keys: {missing_keys}")
     logger.info(f"Unexpected keys: {unexpected_keys}")
+
     return model, True
 
 
@@ -203,7 +221,7 @@ def main():
     caformer_clf = CAFormerGGClassifier(config, caformer).to(
         device=f"cuda:{local_rank}", dtype=torch.bfloat16)
     # Load CAFormerGGClassifier weights from the best checkpoint of stage 3
-    caformer_clf, load_success = load_checkpoint(caformer_clf, config.caformer.ckpt_path)
+    caformer_clf, load_success = load_checkpoint(caformer_clf, config.caformer.ckpt_dir)
 
     if not load_success:
         if is_main_process():

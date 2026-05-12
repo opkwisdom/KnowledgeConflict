@@ -76,7 +76,19 @@ class RCLightningModule(LightningModule):
             labels=labels,
         )
         loss = llm_outputs.loss
+        
+        # Diagnostic logging (K query diversity)
+        with torch.no_grad():
+            normed = F.normalize(caformer_repr, p=2, dim=-1)
+            sim_matrix = torch.bmm(normed, normed.transpose(1, 2))  # (B, K, K)
+            eye_mask = torch.eye(K, dtype=torch.bool, device=caformer_repr.device).unsqueeze(0)
+            off_diag = sim_matrix.masked_fill(eye_mask, 0.0)
+            cos_sim_mean = off_diag.sum() / (B * K * (K - 1))
+            cos_sim_max = off_diag.max()
+            
         self.log("train/nll_loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train/query_cos_sim_mean", cos_sim_mean, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log("train/query_cos_sim_max", cos_sim_max, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         return loss
         
 
@@ -104,6 +116,15 @@ class RCLightningModule(LightningModule):
             labels=labels,
         )
         loss = llm_outputs.loss
+        
+        # Diagnostic logging (K query diversity)
+        with torch.no_grad():
+            normed = F.normalize(caformer_repr, p=2, dim=-1)
+            sim_matrix = torch.bmm(normed, normed.transpose(1, 2))  # (B, K, K)
+            eye_mask = torch.eye(K, dtype=torch.bool, device=caformer_repr.device).unsqueeze(0)
+            off_diag = sim_matrix.masked_fill(eye_mask, 0.0)
+            cos_sim_mean = off_diag.sum() / (B * K * (K - 1))
+            cos_sim_max = off_diag.max()
 
         # Token-level accuracy
         logits = llm_outputs.logits     # (B, K+S, Vocab)
@@ -116,6 +137,8 @@ class RCLightningModule(LightningModule):
 
         self.log("valid/nll_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("valid/acc", val_acc, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("valid/query_cos_sim_mean", cos_sim_mean, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log("valid/query_cos_sim_max", cos_sim_max, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         return loss
 
 

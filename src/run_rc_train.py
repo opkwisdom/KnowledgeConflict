@@ -15,6 +15,9 @@ from utils import setup_logger, load_config
 
 def load_checkpoint(model, checkpoint_dir):
     logger = logging.getLogger(__name__)
+    if checkpoint_dir is None:
+        logger.info(f"No checkpoint directory specified.")
+        return model, False
 
     checkpoint_path = os.path.join(checkpoint_dir, "ctr_loss=4.4344.ckpt")
     if not os.path.exists(checkpoint_path):
@@ -36,6 +39,9 @@ def load_checkpoint(model, checkpoint_dir):
 
 def main():
     torch.serialization.add_safe_globals([DictConfig, ListConfig, OmegaConf])
+    # Allow TF32 (This can be useful for mixed precision training)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     
     config = load_config()
     seed_everything(config.seed)
@@ -56,11 +62,13 @@ def main():
     caformer, resume = load_checkpoint(caformer, config.caformer.ckpt_dir)
 
     lightning_module = RCLightningModule(config.train, llm, llm_tokenizer, caformer)
+    world_size = torch.cuda.device_count()
 
     # Callbacks
+    batch_size = config.data.batch_size * world_size * config.train.accumulate_grad_batches
     from_stage1 = "fromST1" if resume else "Scratch"
     output_dir = os.path.join(config.output_dir,
-                              (f"{config.exp_type}_LR={config.train.learning_rate}"
+                              (f"{config.exp_type}_LR={config.train.learning_rate}_BS={batch_size}"
                                f"_{from_stage1}_Causal={config.caformer.use_causal}"))
     checkpoint_callback = ModelCheckpoint(
         monitor='valid/nll_loss',
@@ -73,7 +81,7 @@ def main():
         auto_insert_metric_name=False
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
-    name = f"{config.exp_type}_LR={config.train.learning_rate}_freeze={config.train.freeze_pretrained}"
+    name = f"{config.exp_type}_LR={config.train.learning_rate}__BS={batch_size}_Causal={config.caformer.use_causal}"
     wandb_logger = WandbLogger(
         project=config.project_name,
         name=name,
@@ -83,9 +91,9 @@ def main():
 
     trainer = Trainer(
         accelerator="gpu",
-        # devices="auto",
-        devices=[0],
-        # strategy="ddp_find_unused_parameters_true",     # LLM parameters are frozen
+        devices="auto",
+        # devices=[0],
+        strategy="ddp_find_unused_parameters_true",     # LLM parameters are frozen
         log_every_n_steps=10,   # More frequent logging
         max_epochs=config.train.max_epochs,
         limit_val_batches=500,    # Limit validation to 500 batches for faster validation

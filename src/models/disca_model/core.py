@@ -131,7 +131,7 @@ class DISCA:
         # doclen_list = []
         for i, (q_text, ctx_list) in enumerate(zip(queries, contexts_list)):
             query_text = self.generate_prompt.format(question=q_text) if use_prompt else q_text
-            formatted_query_text = f"\n\nQuestion: {query_text}"
+            formatted_query_text = f"\n\nQuestion: {q_text}"
             batch_query_texts.append(query_text)
             # Generate source text
             for ctx in ctx_list:
@@ -226,7 +226,6 @@ class DISCA:
         
         inputs_ids_list = []
         seq_lengths = []
-
         for i in range(B):
             b_ids = []
             # System prompt (prefix)
@@ -235,7 +234,7 @@ class DISCA:
 
             for j in range(TOPK):
                 each_doclen = reranked_doclen_tensor[i, j]
-                each_doc_ids = reranked_doc_ids[i, j, :each_doclen]
+                each_doc_ids = reranked_doc_ids[i, j, -each_doclen:]    # Left-padding
                 b_ids.append(each_doc_ids)
                 b_ids.append(newline_ids)  # Add newline between contexts
 

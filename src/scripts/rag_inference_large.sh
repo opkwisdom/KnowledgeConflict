@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=1
 export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH=$PWD:$PYTHONPATH
 
@@ -53,7 +53,7 @@ export PYTHONPATH=$PWD:$PYTHONPATH
 #     data.topk_per_query=10 \
 #     data.do_rerank=False
 
-python3 src/baselines/rag_inference.py \
+python3 src/baselines/rag_inference_large.py \
     --config config/src/baselines/rag.yaml \
     data.name=hotpotqa-w \
     data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl \

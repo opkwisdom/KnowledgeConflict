@@ -52,8 +52,9 @@ caformer:
   dropout: 0.1
 
   use_linear_proj: True   # To embed as soft-prompt
-  ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
+  # ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_fromST1_freeze=True/multi-epoch=00-step=010000-valid_nll_loss=2.0601.ckpt
   # ckpt_path: None         # From scratch
+  ckpt_dir: 
 
   ### Stage-3
   classifier_mode: random   # [random, split_first, kmeans]
