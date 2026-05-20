@@ -1,0 +1,26 @@
+data:
+  name: hotpotqa-w
+  data_path: data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl
+  max_seq_length: 1024
+  use_single_context: False
+
+  topk_per_query: 10
+
+model:
+  model_name: meta-llama/Meta-Llama-3-8B-Instruct
+  gen_kwargs:
+    do_sample: False
+    temperature: 1.0
+    top_p: 1
+    top_k: null
+    max_new_tokens: 32
+
+### Rerank
+do_rerank: False
+reranker_model_name: 
+
+generate_prompt_name: base
+output_dir: results/rag_wo
+task: base
+run_baseline: True
+experiment_name:

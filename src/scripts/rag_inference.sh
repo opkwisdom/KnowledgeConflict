@@ -18,52 +18,14 @@ export PYTHONPATH=$PWD:$PYTHONPATH
 # done
 
 
-# Naive Top-5
-# python3 src/baselines/rag_inference.py \
-#     --config config/src/baselines/rag.yaml \
-#     data.topk_per_query=5
+### RAG config paths
+CONFIG_WO_PATH=config/src/baselines/rag_wo.yaml
+CONFIG_SMALL_PATH=config/src/baselines/rag_small.yaml
+CONFIG_LARGE_PATH=config/src/baselines/rag_large.yaml
 
-
-# Rerank Top-5
-# python3 src/baselines/rag_inference.py \
-#     --config config/src/baselines/rag.yaml \
-#     data.topk_per_query=5 \
-#     data.do_rerank=True
-
-
-# Naive Top-3
-# python3 src/baselines/rag_inference.py \
-#     --config config/src/baselines/rag.yaml \
-#     data.topk_per_query=3
-
-
-# Rerank Top-3
-# python3 src/baselines/rag_inference.py \
-#     --config config/src/baselines/rag.yaml \
-#     data.topk_per_query=3 \
-#     data.do_rerank=True
-
-
-# Rerank Top-10 (total 100)
-# sleep 30m
-# python3 src/baselines/rag_inference.py \
-#     --config config/src/baselines/rag.yaml \
-#     data.name=hotpotqa-w \
-#     data.data_path=data/hotpotqa-w/retrieved/validation_1000r_top100.jsonl \
-#     data.topk_per_query=10 \
-#     data.do_rerank=False
 
 python3 src/baselines/rag_inference.py \
     --config config/src/baselines/rag.yaml \
     data.name=hotpotqa-w \
     data.data_path=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl \
-    data.topk_per_query=10 \
-    data.do_rerank=True
-
-
-# python3 src/baselines/rag_inference.py \
-#     --config config/src/baselines/rag.yaml \
-#     data.name=hotpotqa-w \
-#     data.data_path=data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl \
-#     data.topk_per_query=10 \
-#     data.do_rerank=False
+    data.topk_per_query=10

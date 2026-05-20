@@ -81,6 +81,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(config.model.model_name, torch_dtype="bfloat16", attn_implementation="flash_attention_2")
     tokenizer = AutoTokenizer.from_pretrained(config.model.model_name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
+    tokenizer.padding_side = "left"
     model.to('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Model {config.model.model_name} initialized.")
 

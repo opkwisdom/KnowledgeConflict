@@ -2,6 +2,8 @@ from pytorch_lightning import seed_everything
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from typing import List
 from tqdm import tqdm
+from datetime import timedelta
+from sentence_transformers import CrossEncoder
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from dataclasses import dataclass, asdict
 import torch.distributed as dist
@@ -12,17 +14,24 @@ import re
 import glob
 import json
 
-from models import MultiHiddenCAFormerForGG, CAFormerGGClassifier, DISCA, load_model
+from models import MultiHiddenCAFormerForGG, CAFormerGGClassifier, DISCA, HybridDISCA
 from utils import (
     setup_logger, load_config, load_qa_dataset, compute_metrics, validate_and_save_results,
-    QAExample, InferenceResult
+    QAExample, InferenceResult, MetricResult
 )
 
 def setup_ddp():
-    if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
+
+    if not dist.is_initialized():
+        dist.init_process_group(
+            backend="nccl",
+            timeout=timedelta(hours=2),
+            device_id=device
+        )
+    
     return local_rank
 
 def cleanup_ddp():
@@ -69,40 +78,12 @@ def load_checkpoint(model: CAFormerGGClassifier, checkpoint_dir):
     return model, True
 
 
-def run_inference(
-    config: DictConfig,
-    model: DISCA,
-    dataset: List[QAExample]
-) -> List[InferenceResult]:
-    outputs = []
-    batch_size = config.data.batch_size
-    for i in tqdm(range(0, len(dataset), batch_size), desc="Running Inference"):
-        batch = dataset[i:i+batch_size]
-        queries = [item.question for item in batch]
-        contexts_list = [item.ctxs[10:60] for item in batch]  # exclude the top 10 gold
-        answers = [item.answers for item in batch]
-        
-        batch_answers = model.generate(queries, contexts_list)
-        for idx, (query, pred_answer, gold_answers) in enumerate(zip(queries, batch_answers, answers)):
-            metrics = compute_metrics(pred_answer, gold_answers)
-            result = InferenceResult(
-                id=i+idx,
-                question=query,
-                pred_answer=pred_answer,
-                answers=gold_answers,
-                metrics=metrics
-            )
-            outputs.append(result)
-    return outputs
-
-
-
-
 
 
 class QADataset(Dataset):
-    def __init__(self, examples):
+    def __init__(self, examples, first_topn=50):
         self.examples = examples
+        self.first_topn = first_topn
 
     def __len__(self):
         return len(self.examples)
@@ -112,7 +93,7 @@ class QADataset(Dataset):
         return {
             "idx": idx,                       # 글로벌 원본 인덱스
             "question": item.question,
-            "ctxs": item.ctxs[10:60],         # exclude top 10 gold
+            "ctxs": item.ctxs[:self.first_topn],
             "answers": item.answers,
         }
 
@@ -173,24 +154,37 @@ def run_inference_ddp(
             outputs.append(result)
     return outputs
 
-def gather_results(local_results, world_size):
-    """모든 rank의 결과를 rank 0으로 모음."""
-    gathered = [None for _ in range(world_size)]
-    dist.all_gather_object(gathered, local_results)
-    if is_main_process():
-        merged = []
-        for chunk in gathered:
-            merged.extend(chunk)
-        # 글로벌 인덱스 기준 정렬해서 원본 데이터 순서 복원
-        merged.sort(key=lambda r: r.id)
-        seen = set()
-        deduped = []
-        for r in merged:
-            if r.id not in seen:
-                seen.add(r.id)
-                deduped.append(r)
-        return deduped
-    return None
+def save_local_results(local_results, output_dir, rank):
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, f"_results_rank_{rank}.json")
+    with open(path, "w") as f:
+        json.dump([asdict(r) for r in local_results], f)
+    return path
+
+def gather_from_files(output_dir, world_size):
+    merged = []
+    for rank in range(world_size):
+        path = os.path.join(output_dir, f"_results_rank_{rank}.json")
+        with open(path) as f:
+            chunk = json.load(f)
+        for d in chunk:
+            d["metrics"] = MetricResult(**d["metrics"])
+            merged.append(InferenceResult(**d))
+    
+    merged.sort(key=lambda r: r.id)
+    seen = set()
+    deduped = []
+    for r in merged:
+        if r.id not in seen:
+            seen.add(r.id)
+            deduped.append(r)
+
+    for rank in range(world_size):
+        path = os.path.join(output_dir, f"_results_rank_{rank}.json")
+        if os.path.exists(path):
+            os.remove(path)
+    
+    return deduped
 
 
 def main():
@@ -203,7 +197,8 @@ def main():
 
     config = load_config()
     seed_everything(config.seed)
-    config.output_dir = os.path.join(config.output_dir, config.experiment_name)
+    output_dir = os.path.join(config.output_dir, config.model.model_name.split('/')[-1], config.data.name)
+    config.output_dir = os.path.join(output_dir, config.experiment_name)
     if is_main_process():
         setup_logger("main", config.output_dir)
         logger = logging.getLogger(__name__)
@@ -229,22 +224,33 @@ def main():
         cleanup_ddp()
         return
 
-    model = DISCA(config, config.model.model_name, caformer_clf)
+    if not config.do_hybrid:
+        model = DISCA(config, config.model.model_name, caformer_clf)
+        logger.info("Initialized DISCA model without reranker.")
+    else:
+        ce_reranker = CrossEncoder(config.ce_reranker_path).to(device=f"cuda:{local_rank}")
+        model = HybridDISCA(config, config.model.model_name, caformer_clf, ce_reranker)
+        logger.info(f"Initialized HybridDISCA model with CE reranker {config.ce_reranker_path}.")
 
     dataset = load_qa_dataset(config.data.data_path)
-    # dataset = dataset[:10]  # For quick testing
 
     # Do inference on validation set and save results
-    # results = run_inference(config, model, dataset)
     local_results = run_inference_ddp(config, model, dataset, rank, world_size)
-    dist.barrier()
-    all_results = gather_results(local_results, world_size)
+    save_local_results(local_results, config.output_dir, rank)
+
+    torch.cuda.synchronize()
+    dist.barrier(device_ids=[local_rank])
+    print(f"[Rank {rank}] Saved local results", flush=True)
 
     if is_main_process():
+        all_results = gather_from_files(config.output_dir, world_size)
         validate_and_save_results(all_results, config.output_dir, logger)
         logger.info(f"Saved {len(all_results)} results to {config.output_dir}")
 
+    dist.barrier(device_ids=[local_rank])
+    print(f"[Rank {rank}] Before cleanup", flush=True)
     cleanup_ddp()
+    print(f"[Rank {rank}] Done", flush=True)
 
 if __name__ == "__main__":
     main()

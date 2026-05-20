@@ -19,7 +19,7 @@ from utils import load_qa_dataset, format_reference_answer, RelevanceQAExample
 logger = logging.getLogger(__name__)
 
 
-class GGDataset(Dataset):
+class GGItDataset(Dataset):
     def __init__(self, data: HFDataset, oracle_cache: dict, cfg: DictConfig):
         self.data = data
         self.cfg = cfg
@@ -28,15 +28,21 @@ class GGDataset(Dataset):
         self.roberta_tokenizer = AutoTokenizer.from_pretrained("roberta-base")
         if self.llm_tokenizer.pad_token is None:
             self.llm_tokenizer.pad_token_id = 128004
-        self.llm_tokenizer.padding_side = "right"
+        # self.llm_tokenizer.padding_side = "right"
+        self.llm_tokenizer.padding_side = getattr(cfg.model, "padding_side", "right")
         self.roberta_tokenizer.padding_side = "right"
+        self.model_name = cfg.model.model_name
 
         # Pre-compute table related attributes
         self.use_precompute_table = cfg.data.use_precompute_table
-        self.generation_prompt_template = GENERATE_PROMPT["base"]
+        self.context_prompt_template = GENERATE_PROMPT["base"]
+        self.prefix, self.postfix = template(self.model_name, task="qa", base_template=False)
 
     def __len__(self):
         return len(self.data)
+
+    def _build_query_text(self, question: str) -> str:
+        return self.context_prompt_template.format(question=question)
 
     def __getitem__(self, idx: int):
         """
@@ -44,7 +50,14 @@ class GGDataset(Dataset):
         """
         item = RelevanceQAExample.from_dict(self.data[idx])
         question = item.question
-        generation_prompt = "\n\n" + self.generation_prompt_template.format(question=question)
+        generation_prompt = "\n\n" + self._build_query_text(question)
+        generation_prompt_inputs = self.llm_tokenizer(
+            generation_prompt,
+            truncation=True,
+            max_length=self.cfg.data.max_seq_length,
+            return_tensors="pt",
+            add_special_tokens=False
+        )
 
         # reference answer will be used for loss calculation
         # use pseudo answer? richer signal for CA-Former?
@@ -60,6 +73,27 @@ class GGDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False
         )
+        a_len = answer_inputs["input_ids"].shape[1]
+
+        query_text = self._build_query_text(question)
+        post_ctx_text = f"\n\n\n\n{query_text}{self.postfix}"
+        pre_ctx_text = self.prefix
+
+        pre_ctx_inputs = self.llm_tokenizer(
+            pre_ctx_text,
+            return_tensors="pt",
+            add_special_tokens=False
+        )
+        post_ctx_inputs = self.llm_tokenizer(
+            post_ctx_text,
+            return_tensors="pt",
+            add_special_tokens=False
+        )
+
+        pre_ctx_len = pre_ctx_inputs["input_ids"].shape[1]
+        post_ctx_len = post_ctx_inputs["input_ids"].shape[1]
+
+        # Roberta question inputs
         formatted_question = f"\n\nQuestion: {question}"
         question_inputs = self.llm_tokenizer(
             formatted_question,
@@ -68,17 +102,6 @@ class GGDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False
         )
-        generation_prompt_inputs = self.llm_tokenizer(
-            generation_prompt,
-            truncation=True,
-            max_length=self.cfg.data.max_seq_length,
-            return_tensors="pt",
-            add_special_tokens=False
-        )
-        q_len = question_inputs["input_ids"].shape[1]
-        a_len = answer_inputs["input_ids"].shape[1]
-
-        # Roberta question inputs
         roberta_question_inputs = self.roberta_tokenizer(
             formatted_question,
             truncation=True,
@@ -86,25 +109,33 @@ class GGDataset(Dataset):
             return_tensors="pt",
             add_special_tokens=False
         )
+        q_len = question_inputs["input_ids"].shape[1]
 
         # Construct document inputs and source inputs
         doclen_list = []
         doc_input_ids = []
         source_input_ids = []
-        # ctxs = item.ctxs[:self.cfg.data.first_topk]  # First retrieval
         ctxs = item.ctxs[10:10+self.cfg.data.first_topk]  # Skip the first 10 passages, which contain golden passages
+        max_ctx_len = self.cfg.data.max_seq_length - q_len
+
         for ctx in ctxs:
             ctx_text = f"Title: {ctx.title}\n\n{ctx.text}"
             tokenized_ctx = self.llm_tokenizer(
                 ctx_text,
                 truncation=True,
-                max_length=self.cfg.data.max_seq_length - q_len,
+                max_length=max_ctx_len,
                 return_tensors="pt",
                 add_special_tokens=False
             )
             
-            doc_input = torch.cat([tokenized_ctx["input_ids"], torch.tensor([[self.llm_tokenizer.eos_token_id]])], dim=1)
-            source_input = torch.cat([tokenized_ctx["input_ids"], question_inputs["input_ids"]], dim=1)
+            doc_input = torch.cat([tokenized_ctx["input_ids"],
+                 torch.tensor([[self.llm_tokenizer.eos_token_id]])
+            ], dim=1)
+            source_input = torch.cat([
+                pre_ctx_inputs["input_ids"],
+                tokenized_ctx["input_ids"],
+                post_ctx_inputs["input_ids"]
+            ], dim=1)
             
             doc_input_ids.append(doc_input.squeeze(0))
             source_input_ids.append(source_input.squeeze(0))
@@ -119,18 +150,17 @@ class GGDataset(Dataset):
             "doc_input_ids": doc_input_ids,                   # (k, max_seq_length)
             "source_input_ids": source_input_ids,             # (k, max_seq_length)
             "doclen_list": doclen_list,                       # (k,)
-            "a_len": a_len,                                   # (1,)   
-            "q_len": q_len,
+            "a_len": a_len,                                   # (1,)
             "generation_prompt_ids": generation_prompt_inputs["input_ids"].squeeze(0),      # (gen_prompt_len,)
             "answer_ids": answer_inputs["input_ids"].squeeze(0),                            # (a_len,)
-            "question_ids": question_inputs["input_ids"].squeeze(0),                        # (q_len,)
             "roberta_question_ids": roberta_question_inputs["input_ids"].squeeze(0),        # (roberta_q_len,)
             "roberta_question_mask": roberta_question_inputs["attention_mask"].squeeze(0),  # (roberta_q_len,)
             "scores_oracle": scores_oracle,  # (k,) or None
         }
 
 
-class GGDataModule(LightningDataModule):
+
+class GGItDataModule(LightningDataModule):
     def __init__(self, cfg: DictConfig):
         super().__init__()
         self.cfg = cfg
@@ -140,6 +170,8 @@ class GGDataModule(LightningDataModule):
         self.num_workers = self.data_cfg.num_workers
         self.pad_token_id = 128004
         self.roberta_pad_token_id = 1
+
+        self.llm_padding_side = getattr(self.model_cfg, "padding_side", "right")
 
     def setup(self, stage: Optional[str] = None):
         full_data = load_qa_dataset(self.data_cfg.data_path)
@@ -160,10 +192,10 @@ class GGDataModule(LightningDataModule):
         hf_dataset = HFDataset.from_list(dataset)
         split_dataset = hf_dataset.train_test_split(test_size=self.data_cfg.test_size, seed=self.data_cfg.seed)
         if stage == 'fit' or stage is None:
-            self.train_dataset = GGDataset(split_dataset["train"], self.oracle_cache, self.cfg)
-            self.val_dataset = GGDataset(split_dataset["test"], self.oracle_cache, self.cfg)
+            self.train_dataset = GGItDataset(split_dataset["train"], self.oracle_cache, self.cfg)
+            self.val_dataset = GGItDataset(split_dataset["test"], self.oracle_cache, self.cfg)
         elif stage == 'validate':
-            self.val_dataset = GGDataset(split_dataset["test"], self.oracle_cache, self.cfg)
+            self.val_dataset = GGItDataset(split_dataset["test"], self.oracle_cache, self.cfg)
         else:
             raise ValueError(f"Unknown stage: {stage}")
 
@@ -200,8 +232,8 @@ class GGDataModule(LightningDataModule):
                 source_lens.append(len(s_ids))
 
         # Utilize C++ backends
-        flat_doc_ids = pad_sequence(flat_doc_ids_list, batch_first=True, padding_value=self.pad_token_id)
-        flat_source_ids = pad_sequence(flat_source_ids_list, batch_first=True, padding_value=self.pad_token_id)
+        flat_doc_ids = pad_sequence(flat_doc_ids_list, batch_first=True, padding_value=self.pad_token_id, padding_side=self.llm_padding_side)
+        flat_source_ids = pad_sequence(flat_source_ids_list, batch_first=True, padding_value=self.pad_token_id, padding_side=self.llm_padding_side)
         padded_roberta_question_ids = pad_sequence(roberta_q_ids_list, batch_first=True, padding_value=self.roberta_pad_token_id)
 
         max_doc_len = flat_doc_ids.shape[1]
@@ -233,8 +265,6 @@ class GGDataModule(LightningDataModule):
             "generation_prompt_ids": [item["generation_prompt_ids"] for item in batch],
             # Answer input
             "answer_ids": [item["answer_ids"] for item in batch],
-            # Question input for gen loss after re-ranking (Not padded)
-            "question_ids": [item["question_ids"] for item in batch],
             # Question input for CA-Former
             "roberta_question_ids": padded_roberta_question_ids,
             "roberta_question_mask": padded_roberta_question_mask,
@@ -250,7 +280,7 @@ class GGDataModule(LightningDataModule):
             pin_memory=True,
             collate_fn=self.collate_fn,
             persistent_workers=True,
-            prefetch_factor=2,
+            prefetch_factor=self.num_workers,
         )
     
     def val_dataloader(self):
@@ -262,7 +292,7 @@ class GGDataModule(LightningDataModule):
             pin_memory=True,
             collate_fn=self.collate_fn,
             persistent_workers=True,
-            prefetch_factor=2,
+            prefetch_factor=self.num_workers,
         )
 
 

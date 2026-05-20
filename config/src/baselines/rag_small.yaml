@@ -8,7 +8,6 @@ data:
   use_single_context: False
 
   topk_per_query: 10
-  do_rerank: False
 
 model:
   model_name: meta-llama/Meta-Llama-3-8B-Instruct
@@ -19,8 +18,12 @@ model:
     top_k: null
     max_new_tokens: 32
 
+### Rerank
+do_rerank: False
+reranker_model_name: cross-encoder/ms-marco-MiniLM-L-6-v2
+
 generate_prompt_name: base
-output_dir: results/rag
+output_dir: results/rag_small
 task: base
 run_baseline: True
 experiment_name:

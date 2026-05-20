@@ -22,7 +22,8 @@ from vllm import LLM, SamplingParams
 
 BASE_TEMPLATE = GENERATE_PROMPT["pure-llm"]
 CONTEXT_TEMPLATE = GENERATE_PROMPT["base"]
-MODEL_NAME_OR_PATH = "meta-llama/Meta-Llama-3-8B-Instruct"
+# MODEL_NAME_OR_PATH = "meta-llama/Meta-Llama-3-8B-Instruct"
+MODEL_NAME_OR_PATH = "Qwen/Qwen2.5-7B-Instruct"
 
 
 ### Helper functions ###
@@ -140,8 +141,10 @@ def main():
     parser.add_argument("--output_file", type=str, required=True)
     args = parser.parse_args()
 
-    input_dir = "/workspaces/kvzip_nlplab/data/hotpotqa-w/retrieved"
-    output_dir = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama"
+    # input_dir = "/workspaces/kvzip_nlplab/data/hotpotqa-w/retrieved"
+    input_dir = "/workspaces/kvzip_nlplab/data/train"
+    # output_dir = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama"
+    output_dir = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/qwen"
     input_path = os.path.join(input_dir, args.input_file)
     save_path = os.path.join(output_dir, args.output_file)
 
@@ -150,14 +153,12 @@ def main():
 
     
     data = load_json_data(input_path)
-    # data = data[:1000]   # Limit to first 1000 examples for testing
-    model_name_or_path = "meta-llama/Meta-Llama-3-8B-Instruct"
+    # model_name_or_path = "meta-llama/Meta-Llama-3-8B-Instruct"
+    model_name_or_path = "Qwen/Qwen2.5-7B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     tokenizer.pad_token_id = tokenizer.eos_token_id
-    # model = AutoModelForCausalLM.from_pretrained(model_name_or_path, device_map="auto", torch_dtype="auto")
     num_device = torch.cuda.device_count()
     assert num_device > 0, "No GPUs detected. Please run on a machine with at least one GPU."
-    # assert num_device % 2 == 0, "Number of GPUs must be even for tensor parallelism."
 
     model = LLM(
         model_name_or_path,
@@ -181,10 +182,7 @@ def main():
     
     batch_size = 1024
     SAVE_QUERY_SIZE = 100
-    # save_path = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/loss_precompute_table.h5"
     os.makedirs(save_path, exist_ok=True)
-    # with h5py.File(save_path, 'w') as f:
-    #     pass
 
     valid_indices = list(valid_items.keys())
     total_queries = len(valid_indices)

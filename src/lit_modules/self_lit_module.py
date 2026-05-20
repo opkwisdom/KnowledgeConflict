@@ -12,41 +12,34 @@ from omegaconf import DictConfig
 from transformers import get_linear_schedule_with_warmup, AutoTokenizer, AutoModelForCausalLM
 
 from utils import compute_metrics, parse_reference_answer, load_h5_scores, compute_ndcg, compute_recall
-from models import load_model, CAFormerGGClassifier, RankwiseGuideLoss, PairwiseRankGuideLoss, ListwiseGuideLoss, LambdaLoss
+from models import SelfGenLossModel, ListwiseGuideLoss
 
 logger = logging.getLogger(__name__)
 
 
-RANKLOSS_DICT = {
-    "pairwise": PairwiseRankGuideLoss,
-    "listwise": ListwiseGuideLoss,
-    "lambda": LambdaLoss
-}
-
-
-class GenLossClfLightningModule(LightningModule):
+class GenLossSelfLightningModule(LightningModule):
     def __init__(self, cfg: DictConfig,
-                 llm: AutoModelForCausalLM, llm_tokenizer: AutoTokenizer, caformer_clf: CAFormerGGClassifier):
+                 llm: AutoModelForCausalLM, llm_tokenizer: AutoTokenizer):
         super().__init__()
-        self.save_hyperparameters(ignore=["llm", "caformer_clf"])
+        self.save_hyperparameters(ignore=["llm"])
 
         self.llm = llm
         self.llm_tokenizer = llm_tokenizer
-        self.caformer_clf = caformer_clf
         self.cfg = cfg
         self.learning_rate = cfg.learning_rate
         self.top_r = getattr(cfg, "topk_per_query", 10)
-        self.gamma = getattr(cfg, "gamma", 1.0)
         self.alpha = getattr(cfg, "alpha", 0.5)
-        self.T = getattr(cfg, "T", 1.0) 
 
-        self.score_transform = getattr(cfg, "score_transform", None)
-        self.scaling_factor = getattr(cfg, "scaling_factor", 1.0)
-        self.loss_method = getattr(cfg, "loss_method", "lambda")
+        # Soft prompt model
+        n_soft_tokens = getattr(cfg, "query_length", 32)
+        hidden_dim = self.llm.config.hidden_size
+        self.soft_model = SelfGenLossModel(llm, n_soft_tokens, hidden_dim)
+
         # self.pointwise_guide_loss_fn = nn.MSELoss()
         self.pointwise_guide_loss_fn = nn.SmoothL1Loss(reduction='mean')
-        self.rankwise_guide_loss_fn = self._init_rankloss(self.loss_method)
-        self.gen_loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+        # self.rankwise_guide_loss_fn = RankwiseGuideLoss()
+        # self.rankwise_guide_loss_fn = PairwiseRankGuideLoss()
+        self.rankwise_guide_loss_fn = ListwiseGuideLoss(cfg.T)
         self.prefix, self.postfix = template(self.llm.config.model_type, base_template=False)
 
         self.val_preds = []
@@ -54,16 +47,6 @@ class GenLossClfLightningModule(LightningModule):
         self.val_ndcg_scores = []
         self.val_recall_scores = []
         self.prepare_modules()
-    
-    def _init_rankloss(self, method_name: str):
-        if method_name == "pairwise":
-            return PairwiseRankGuideLoss()
-        elif method_name == "listwise":
-            return ListwiseGuideLoss(T=self.T)
-        elif method_name == "lambda":
-            return LambdaLoss(k=self.top_r)
-        else:
-            raise ValueError(f"Unsupported loss method: {method_name}")
 
     @property
     def strict_loading(self):
@@ -73,8 +56,10 @@ class GenLossClfLightningModule(LightningModule):
         # Freeze the pretrained LLM
         for param in self.llm.parameters():
             param.requires_grad = False
-        
-        for param in self.caformer_clf.parameters():
+
+        # Soft tokens and classifier are trainable
+        self.soft_model.soft_tokens.requires_grad = True
+        for param in self.soft_model.classifier.parameters():
             param.requires_grad = True
 
         self.prefix_ids = self.llm_tokenizer(
@@ -86,28 +71,37 @@ class GenLossClfLightningModule(LightningModule):
             add_special_tokens=False
         )["input_ids"].squeeze(0)
 
+        # Gradient checkpointing configuration
+        # This is useful for fine-tuning adapter weights while keeping the model weights fixed.
+        self.llm.enable_input_require_grads()
+        self.llm.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
+        for module in self.llm.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = 0.0
+
     def train(self, mode: bool = True):
         super().train(mode)
-        self.llm.eval()  # Ensure the base model is always in eval mode
+        if mode:
+            self.llm.train()
+        return self
+        # self.llm.eval()  # Ensure the base model is always in eval mode
 
-    def forward(self, batch):
-        """
-        Forward pass to generate LLM hidden states for both documents and CA-Former input.
-        Returns:
-            llm_repr: Tensor of shape (B*K, L, S, D_llm) - LLM hidden states for CA-Former input
-        """
-        # Generate LLM hidden states for CA-Former input
-        with torch.no_grad():
-            llm_outputs = self.llm.model(
-                input_ids=batch["source_input_ids"],
-                attention_mask=batch["source_attention_mask"],
-                output_hidden_states=True,
-                use_cache=False,
-                return_dict=True
-            )
-            llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
-        return llm_repr
+    def on_train_start(self):
+        self.llm.train()
     
+    def on_train_epoch_start(self):
+        self.llm.train()
+
+    def predict_scores(self, batch):
+        scores = self.soft_model(
+            input_ids=batch["source_input_ids"],
+            attention_mask=batch["source_attention_mask"]
+        )
+        return scores
+    
+    ### Same logic ###
     @torch.inference_mode()
     def generate_answer(self, batch, top_r_indices, batch_idx):
         """
@@ -147,7 +141,7 @@ class GenLossClfLightningModule(LightningModule):
             sample_input_ids.append(self.prefix_ids.to(sample_doc_input_ids.device))
             for idx in sample_top_r_indices:
                 doclen = sample_doclen_list[idx]
-                doc_ids = sample_doc_input_ids[idx, :doclen]
+                doc_ids = sample_doc_input_ids[idx, -doclen:]   # left padding
                 sample_input_ids.append(doc_ids)
                 sample_input_ids.append(newline_ids)
             sample_input_ids.append(sample_generation_prompt_ids)
@@ -233,12 +227,19 @@ class GenLossClfLightningModule(LightningModule):
 
         topr_indices = topk_student_indices[:, :self.top_r]
         return topr_indices, batch_ndcg, batch_recall
+    ### Same logic ###
+
 
     def training_step(self, batch, batch_idx):
-        llm_repr = self.forward(batch)
-        scores_hat, _ = self.caformer_clf(llm_repr, batch["source_attention_mask"],
-                                        batch["roberta_question_ids"], batch["roberta_question_mask"])
-        del llm_repr
+        if batch_idx == 0:
+            logger.info(f"Train Step {batch_idx}:")
+            logger.info(f"self.training: {self.training}")
+            logger.info(f"self.soft_model.training: {self.soft_model.training}")
+            logger.info(f"self.soft_model.llm.training: {self.soft_model.llm.training}")
+            logger.info(f"self.soft_model.llm.model.training: {self.soft_model.llm.model.training}")
+            logger.info(f"gradient checkpointing: {self.llm.is_gradient_checkpointing}")
+
+        scores_hat = self.predict_scores(batch)  # (B*K,)
 
         raw_scores_oracle = batch["scores_oracle"].reshape(-1, 1)   # (B*K, 1)
         scores_oracle = raw_scores_oracle.to(scores_hat.device)
@@ -283,12 +284,15 @@ class GenLossClfLightningModule(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        llm_repr = self.forward(batch)
-        scores_hat, _ = self.caformer_clf(llm_repr, batch["source_attention_mask"],
-                                                            batch["roberta_question_ids"], batch["roberta_question_mask"])
-        del llm_repr
+        if batch_idx == 0:
+            logger.info(f"Validation Step {batch_idx}:")
+            logger.info(f"self.training: {self.training}")
+            logger.info(f"self.llm.training: {self.llm.training}")
+            logger.info(f"self.llm.model.training: {self.llm.model.training}")
+            logger.info(f"gradient checkpointing: {self.llm.is_gradient_checkpointing}")
+        
+        scores_hat = self.predict_scores(batch)  # (B*K,)
 
-        # Compute the gradient of the oracle loss and target score
         raw_scores_oracle = batch["scores_oracle"].reshape(-1, 1)   # (B*K, 1)
         scores_oracle = raw_scores_oracle.to(scores_hat.device)
 
@@ -361,32 +365,25 @@ class GenLossClfLightningModule(LightningModule):
     def on_save_checkpoint(self, checkpoint):
         # save only CAFormer classifier weights
         state_dict = checkpoint["state_dict"]
-        caformer_clf_state_dict = {
-            k: v for k, v in state_dict.items() if "caformer_clf" in k
+        soft_state = {
+            k: v for k, v in state_dict.items() if "soft_model" in k and "llm" not in k
         }
-        checkpoint["state_dict"] = caformer_clf_state_dict
+        checkpoint["state_dict"] = soft_state
 
     def configure_optimizers(self):
-        # trainable_params = filter(lambda p: p.requires_grad, self.caformer_clf.parameters())
-        caformer_params = [
-            p for p in self.caformer_clf.caformer.parameters() if p.requires_grad
-        ]
-    
-        classifier_params = [
-            p for p in self.caformer_clf.classifier.parameters() if p.requires_grad
-        ]
+        # Soft tokens: Lower LR
+        # Classifier: Larger LR (random init)
+        soft_token_params = [self.soft_model.soft_tokens]
+        classifier_params = [p for p in self.soft_model.classifier.parameters() if p.requires_grad]
 
-        # Separate parameter groups, Classifier is random initialized
         optimizer_grouped_parameters = [
-            {"params": caformer_params, "lr": self.learning_rate},
+            {"params": soft_token_params, "lr": self.learning_rate},
             {"params": classifier_params, "lr": 1e-3}
         ]
         optimizer = torch.optim.AdamW(optimizer_grouped_parameters, fused=False)
 
-        # optimizer = torch.optim.AdamW(trainable_params, lr=self.learning_rate, fused=True)
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = int(self.cfg.warmup_ratio * total_steps)
-
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
             num_warmup_steps=warmup_steps,
@@ -404,11 +401,11 @@ class GenLossClfLightningModule(LightningModule):
     # Debugging: Log gradient norms of CAFormer and classifier every 10 steps
     def on_after_backward(self):
         if self.global_step % 10 == 0:
-            caformer_grad_norm = self._compute_grad_norm(self.caformer_clf.caformer)
-            classifier_grad_norm = self._compute_grad_norm(self.caformer_clf.classifier)
-            
-            self.log("train/caformer_grad_norm", caformer_grad_norm, on_step=True)
-            self.log("train/classifier_grad_norm", classifier_grad_norm, on_step=True)
+            soft_grad_norm = self.soft_model.soft_tokens.grad.norm(2).item() \
+                if self.soft_model.soft_tokens.grad is not None else 0.0
+            cls_grad_norm = self._compute_grad_norm(self.soft_model.classifier)
+            self.log("train/soft_tokens_grad_norm", soft_grad_norm, on_step=True)
+            self.log("train/classifier_grad_norm", cls_grad_norm, on_step=True)
 
     def _compute_grad_norm(self, module):
         total_norm_sq = 0.0

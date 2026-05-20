@@ -11,58 +11,17 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf, ListConfig
 from datetime import datetime
-from transformers import AutoModelForCausalLM, AutoModel
 import logging
 
 import os
-import re
-import glob
 import typing
 import omegaconf.base
 import collections
 
-from models import MultiHiddenCAFormerForGG, CAFormerGGClassifier, load_model
+from models import load_model
 from datamodule import GGDataModule, GGItDataModule
-from lit_modules import GGLightningModule, GenLossClfLightningModule
+from lit_modules import GenLossSelfLightningModule
 from utils import setup_logger, load_config
-
-
-
-
-def load_checkpoint(model, checkpoint_dir):
-    logger = logging.getLogger(__name__)
-    if checkpoint_dir is None:
-        logger.info(f"No checkpoint path specified.")
-        return model, False
-    
-    ckpt_files = glob.glob(os.path.join(checkpoint_dir, "*.ckpt"))
-    if not ckpt_files:
-        logger.info(f"No checkpoint path specified.")
-        return model, False
-    
-    pattern = re.compile(r'valid_nll_loss=(-?\d+\.?\d*)')
-    candidates = []
-    for path in ckpt_files:
-        filename = os.path.basename(path)
-        match = pattern.search(filename)
-        if match:
-            value = float(match.group(1))
-            candidates.append((value, path))
-            
-    best = min(candidates, key=lambda x: x[0])
-    logger.info(f"Loading CAFormer checkpoint from {best[1]}...")
-    checkpoint = torch.load(best[1], map_location="cpu", weights_only=False)
-    
-    cleaned_state_dict = {}
-    for key, value in checkpoint["state_dict"].items():
-        if key.startswith("caformer."):
-            new_key = key[len("caformer."):]
-            cleaned_state_dict[new_key] = value
-    missing_keys, unexpected_keys = model.load_state_dict(cleaned_state_dict, strict=False)
-    logger.info(f"Missing keys: {missing_keys}")
-    logger.info(f"Unexpected keys: {unexpected_keys}")
-    
-    return model, True
 
 
 def main():
@@ -76,7 +35,7 @@ def main():
 
     config = load_config()
     seed_everything(config.seed)
-    experiment_name = "stage3_clf_only_train"
+    experiment_name = "self_train"
     config.output_dir = os.path.join(config.output_dir, experiment_name)
     setup_logger("main", config.output_dir)
     logger = logging.getLogger(__name__)
@@ -88,25 +47,18 @@ def main():
     logger.info(f"DataModule {datamodule.__class__.__name__} initialized.")
 
     llm, llm_tokenizer = load_model(config.model.model_name)
-    config.caformer.llm_width = llm.config.hidden_size  # post-init
-    caformer = MultiHiddenCAFormerForGG(config.caformer).to(dtype=torch.bfloat16)
-    # Load CAFormer weights from the best checkpoint of stage 2
-    caformer, resume = load_checkpoint(caformer, config.caformer.ckpt_dir)
-    caformer_clf = CAFormerGGClassifier(config, caformer).to(dtype=torch.bfloat16)
-
-    lightning_module = GenLossClfLightningModule(config.train, llm, llm_tokenizer, caformer_clf)
+    llm_tokenizer.padding_side = getattr(config.model, "padding_side", "right")
+    lightning_module = GenLossSelfLightningModule(config.train, llm, llm_tokenizer)
 
     # Callbacks
-    from_stage2 = "fromST2" if resume else "Scratch"
     current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     batch_size = config.data.batch_size * config.train.accumulate_grad_batches
     output_dir = os.path.join(config.output_dir,
                               (f"{config.exp_type}_LR={config.train.learning_rate}"
-                               f"_{from_stage2}_BS={batch_size}"
+                               f"_Scratch_BS={batch_size}"
                                f"_Epochs={config.train.max_epochs}"
-                               f"_Pool={config.caformer.pooling_strategy}"
-                               f"_Loss={config.train.loss_method}"
-                               f"_T={config.train.T}_Alpha={config.train.alpha}_SYS={config.use_it}_time={current_time}"))
+                               f"_Pool={config.train.pooling_strategy}"
+                               f"_T={config.train.T}_Alpha={config.train.alpha}_SYS={config.use_it}"))
     best_checkpoint_callback = ModelCheckpoint(
         monitor='valid/loss',
         dirpath=output_dir,
@@ -119,7 +71,7 @@ def main():
     
     world_size = torch.cuda.device_count()
     lr_monitor = LearningRateMonitor(logging_interval='step')
-    name = f"{config.exp_type}_LR={config.train.learning_rate}_BS={batch_size}_freeze={config.train.freeze_pretrained}"
+    name = f"Self-Train_{config.exp_type}_LR={config.train.learning_rate}_BS={batch_size}"
     wandb_logger = WandbLogger(
         project=config.project_name,
         name=name,

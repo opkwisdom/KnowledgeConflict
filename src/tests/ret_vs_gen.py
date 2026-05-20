@@ -129,7 +129,7 @@ def rerank_test(data, oracle_scores, reranker_model):
 
 def save_results(ce_results, oracle_results, correlation_summary, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    result_path = os.path.join(output_dir, "retrieval_vs_sys_generation_results.json")
+    result_path = os.path.join(output_dir, "retrieval_vs_generation_results.json")
     results = {
         "ce_results": [f"NDCG@{k}: {score}" for k, score in zip([1, 3, 5, 10], ce_results)],
         "oracle_results": [f"NDCG@{k}: {score}" for k, score in zip([1, 3, 5, 10], oracle_results)],
@@ -147,8 +147,8 @@ def main():
 
     # Load data and scores
     data_path = "/workspaces/kvzip_nlplab/data/hotpotqa-w/raw/validation_with_gold_ctx_5000.jsonl"
-    # oracle_scores_path = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_val_whole_short_loss_precompute_table.h5"
-    oracle_scores_path = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_sys_val_whole_short_loss_precompute_table.h5"
+    oracle_scores_path = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_val_whole_short_loss_precompute_table.h5"
+    # oracle_scores_path = "/workspaces/kvzip_nlplab/checkpoint/genloss_precompute_table/llama/hotpotqa-w_sys_val_whole_short_loss_precompute_table.h5"
 
     data = load_json_data(data_path)
     oracle_scores = load_h5_scores(oracle_scores_path)

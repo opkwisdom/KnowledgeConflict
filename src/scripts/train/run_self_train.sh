@@ -165,27 +165,20 @@ export CUDA_LAUNCH_BLOCKING=1
 
 ### Full-2 (Sys)
 ALPHA=1.0
-CMODE=split_first
-AMODE=full
 POOL=mean
-LOSS_METHOD=listwise
-USE_CAUSAL=False
 EPOCHS=2
 
-RAW_DATASET=data/train/mhqa_train_half_force.jsonl
-CLEAN_DATASET=data/train/mhqa_train_half_clean.jsonl
+TEST_SET=data/train/mhqa_train_pilot.jsonl
+WHOLE_SET=data/train/mhqa_train_half_force.jsonl
 
-python3 src/run_gg_clf_train.py \
-    --config config/src/train/run_gg_clf_train.yaml \
+
+python3 src/run_self_train.py \
+    --config config/src/train/run_self_train.yaml \
     data.name=mhqa \
-    data.data_path=$CLEAN_DATASET \
+    data.data_path=$WHOLE_SET \
     train.max_epochs=$EPOCHS \
     train.alpha=$ALPHA \
-    train.loss_method=$LOSS_METHOD \
-    caformer.classifier_mode=$CMODE \
-    caformer.attention_mode=$AMODE \
-    caformer.pooling_strategy=$POOL \
-    caformer.use_causal=$USE_CAUSAL \
+    train.pooling_strategy=$POOL \
     use_it=True
 
 

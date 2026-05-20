@@ -1,26 +1,20 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from omegaconf import DictConfig, OmegaConf
-from typing import List, Dict, Tuple, Union, Optional
+from typing import List, Union, Optional
 import torch
 import logging
 from datetime import datetime
-from dataclasses import dataclass, asdict
 from tqdm import tqdm
 from sentence_transformers import CrossEncoder
-import json
 import os
 
 from src.prompt import GENERATE_PROMPT
 from src.utils import (
-    load_config, setup_logger, load_relevance_dataset, load_qa_dataset, has_answer, compute_metrics, MetricResult,
+    load_config, setup_logger, load_qa_dataset, compute_metrics, validate_and_save_results,
     apply_template,
-    RelevanceQAExample, QAExample, CtxExample,
+    QAExample, CtxExample,
     InferenceResult,
 )
-
-# Popular cross-encoder
-RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"    # 22M
-# RERANKER_MODEL_NAME = "BAAI/bge-reranker-base"                  # 280M
 
 
 
@@ -90,7 +84,7 @@ def run_baseline_inference(
             item.ctxs,
             config.data.use_single_context,
             topk=config.data.topk_per_query,
-            do_rerank=config.data.do_rerank,
+            do_rerank=config.do_rerank,
             query=item.question,
             reranker_model=reranker_model
         )
@@ -122,39 +116,6 @@ def run_baseline_inference(
         results.append(sample_result)
     return results
 
-def validate_and_save_results(
-    inference_list: Dict[str, List[InferenceResult]],
-    output_dir: str,
-    logger: logging.Logger,
-) -> None:
-    summary_path = f"{output_dir}/inference_summary.txt"
-    all_results_path = f"{output_dir}/inference_results.json"
-
-    total = len(inference_list)
-    correct = sum([1 for res in inference_list if res.metrics.soft_em])
-    recall = sum([res.metrics.recall for res in inference_list]) / total if total > 0 else 0.0
-    precision = sum([res.metrics.precision for res in inference_list]) / total if total > 0 else 0.0
-    f1 = sum([res.metrics.f1 for res in inference_list]) / total if total > 0 else 0.0
-
-    accuracy = correct / total if total > 0 else 0.0
-    logger.info(f"Total={total}, Correct={correct}, Accuracy={accuracy:.4f},"
-                f" Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
-    summary = {
-        "total": total,
-        "correct": correct,
-        "accuracy": round(accuracy, 4),
-        "recall": round(recall, 4),
-        "precision": round(precision, 4),
-        "f1": round(f1, 4),
-    }
-    
-    with open(summary_path, 'w') as f:
-        json.dump(summary, f, ensure_ascii=False, indent=4)
-    logger.info(f"Saved inference summary to {summary_path}")
-    with open(all_results_path, 'w') as f:
-        json_results = [asdict(res) for res in inference_list]
-        json.dump(json_results, f, ensure_ascii=False, indent=4)
-
 
 def main():
     config = load_config()
@@ -163,7 +124,8 @@ def main():
     experiment_name = f"prompt={config.generate_prompt_name}"
     output_dir = os.path.join(config.output_dir, config.model.model_name.split('/')[-1], config.data.name)  # Use data name from config
     if config.data.do_rerank:
-        experiment_name += f"_{RERANKER_MODEL_NAME.split('/')[-1]}"
+        reranker_model_name = getattr(config, "reranker_model_name", None)
+        experiment_name += f"_{reranker_model_name.split('/')[-1]}"
 
     config.output_dir = os.path.join(output_dir, experiment_name)
     
@@ -173,9 +135,6 @@ def main():
     logger.info(OmegaConf.to_yaml(config))
 
     # Load data
-    # if "nq" in config.data.data_path:
-    #     data = load_relevance_dataset(config.data.data_path)
-    # else:
     data = load_qa_dataset(config.data.data_path)
     logger.info(f"Loaded {len(data)} data entries from {config.data.data_path}")
 
@@ -187,10 +146,14 @@ def main():
     model.to('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Model {config.model.model_name} initialized.")
 
-    reranker_model = CrossEncoder(RERANKER_MODEL_NAME) if config.data.do_rerank else None
-    if reranker_model is not None:
+    reranker_model_name = getattr(config, "reranker_model_name", None)
+    if config.data.do_rerank and reranker_model_name is None:
+        logger.warning("Reranking is enabled but no reranker model name provided. Reranking will be skipped.")
+        reranker_model = None
+    else:
+        reranker_model = CrossEncoder(reranker_model_name)
         reranker_model.to('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Reranker model {RERANKER_MODEL_NAME} initialized.")
+        logger.info(f"Reranker model {reranker_model_name} initialized.")
     
     inference_results = run_baseline_inference(config, model, tokenizer, data, reranker_model, logger)
     validate_and_save_results(inference_results, config.output_dir, logger)

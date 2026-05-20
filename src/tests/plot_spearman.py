@@ -10,10 +10,11 @@ def plot_spearman(data, output_path):
     plt.figure(figsize=(10, 6))
 
     data = np.array(data["spearman"]["spearman_distribution"])
+    spearman_mean = data.mean()
     n_samples = len(data)
     
     sns.histplot(data, kde=True, color="#3498db", bins=50)
-    plt.title(f"Spearman Correlation Distribution ({n_samples})", pad=15, fontweight="bold")
+    plt.title(f"Spearman Correlation Distribution (N={n_samples}, Rho={spearman_mean:.4f})", pad=15, fontweight="bold")
     plt.ylabel("Density", labelpad=10)
     plt.xlabel("Spearman Correlation")
 
@@ -25,8 +26,8 @@ def plot_spearman(data, output_path):
 
 def main():
     # test_type, do_vllm = sys.argv[1], bool(sys.argv[2])
-    input_path = f"results/ret_vs_gen/sys_retrieval_vs_generation_results.json"
-    output_path = f"results/ret_vs_gen/sys_spearman_plot.png"
+    input_path = f"src/tests/ret_vs_gen/retrieval_vs_generation_results.json"
+    output_path = f"src/tests/ret_vs_gen/spearman_plot.png"
 
     with open(input_path, "r") as f:
         data = json.load(f)

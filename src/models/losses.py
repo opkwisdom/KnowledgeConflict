@@ -134,13 +134,15 @@ class ListwiseGuideLoss(torch.nn.Module):
         input_scores = input_scores.float()
         target_scores = target_scores.float()
 
-        target_log_prob = torch.log_softmax(target_scores / self.T, dim=-1)  # (B, K)
-        target_prob = target_log_prob.exp().detach()
+        target_log_prob = torch.log_softmax(target_scores / self.T, dim=-1).detach()  # (B, K)
+        target_prob = target_log_prob.exp()
 
         input_log_prob = torch.log_softmax(input_scores / self.T, dim=-1)  # (B, K)
-        loss = -(self.T ** 2) * (target_prob * input_log_prob).sum(dim=-1).mean()   # KL divergence
+        input_prob = input_log_prob.exp()
+        # loss = -(self.T ** 2) * (target_prob * input_log_prob).sum(dim=-1).mean()   # Forward KL
+        loss = (self.T ** 2) * (input_prob * (input_log_prob - target_log_prob)).sum(dim=-1).mean()  # Reverse KL
         return loss
-    
+
 
 class PairwiseRankGuideLoss(torch.nn.Module):
     def __init__(self):
@@ -150,13 +152,13 @@ class PairwiseRankGuideLoss(torch.nn.Module):
     def forward(self, input_scores: torch.FloatTensor, target_scores: torch.FloatTensor):
         """
         Args:
-            input: Tensor of shape (B, K)
-            target: Tensor of shape (B, K)
+            input: Tensor of shape (B, N)
+            target: Tensor of shape (B, N)
         Returns:
             loss: Scalar tensor representing the rankwise score loss
         """
-        input_diff = (input_scores.unsqueeze(2) - input_scores.unsqueeze(1)) * 10  # (B, K, K)
-        target_diff = target_scores.unsqueeze(2) - target_scores.unsqueeze(1)  # (B, K, K)
+        input_diff = (input_scores.unsqueeze(2) - input_scores.unsqueeze(1)) * 10  # (B, N, N)
+        target_diff = target_scores.unsqueeze(2) - target_scores.unsqueeze(1)  # (B, N, N)
         
         target_labels = (target_diff > 0).float()
         valid_mask = (target_diff != 0).float()
@@ -164,3 +166,77 @@ class PairwiseRankGuideLoss(torch.nn.Module):
         masked_loss = raw_loss * valid_mask
         loss = masked_loss.sum() / valid_mask.sum().clamp(min=1e-6)
         return loss
+    
+
+class LambdaLoss(torch.nn.Module):
+    def __init__(self, sigma: float = 1.0, eps: float = 1e-10, reduction: str = 'mean', k: int = 10):
+        super().__init__()
+        self.sigma = sigma
+        self.eps = eps
+        self.reduction = reduction
+        self.k = k
+
+    def forward(self, input_scores: torch.FloatTensor, target_scores: torch.FloatTensor):
+        """
+        Args:
+            input: Tensor of shape (B, N)
+            target: Tensor of shape (B, N)
+        Returns:
+            loss: Scalar tensor representing the rankwise score loss
+        """
+        input_scores = input_scores.float()
+        target_scores = target_scores.float()
+        
+        B, N = input_scores.shape
+        device = input_scores.device
+        # ---------- Gain from teacher score ----------
+        # Use ReLU to convert continuous score to non-negative gain and per-query normalize
+        gains = torch.relu(target_scores)  # (B, N)
+        gains = gains / gains.max(dim=-1, keepdim=True).values.clamp(min=self.eps)
+        
+        # ---------- Ideal DCG (for normalization) ----------
+        ideal_gains, _ = gains.sort(dim=-1, descending=True)  # (B, N)
+        positions = torch.arange(1, N + 1, device=device, dtype=torch.float)
+        ideal_discounts = 1.0 / torch.log2(positions + 1.0)  # (N,)
+        
+        # Apply k truncation if specified
+        if self.k is not None and self.k < N:
+            ideal_dcg = (ideal_gains[:, :self.k] * ideal_discounts[:self.k]).sum(dim=-1, keepdim=True)
+        else:
+            ideal_dcg = (ideal_gains * ideal_discounts).sum(dim=-1, keepdim=True)
+        ideal_dcg = ideal_dcg + self.eps  # (B, 1)
+        
+        # ---------- Predicted ranks (1-indexed) ----------
+        pred_ranks = input_scores.argsort(dim=-1, descending=True).argsort(dim=-1).float() + 1.0  # (B, N)
+        pred_discounts = 1.0 / torch.log2(pred_ranks + 1.0)  # (B, N)
+        
+        # ---------- Pairwise tensors ----------
+        score_diff = input_scores.unsqueeze(-1) - input_scores.unsqueeze(-2)  # (B, N, N)
+        target_diff = gains.unsqueeze(-1) - gains.unsqueeze(-2)  # (B, N, N)
+        pair_mask = (target_diff > 0).float()  # (B, N, N)
+        
+        # ---------- NDCG delta (lambda weight) ----------
+        gain_diff = torch.abs(gains.unsqueeze(-1) - gains.unsqueeze(-2))  # (B, N, N)
+        discount_diff = torch.abs(pred_discounts.unsqueeze(-1) - pred_discounts.unsqueeze(-2))  # (B, N, N)
+        delta_ndcg = (gain_diff * discount_diff) / ideal_dcg.unsqueeze(-1)  # (B, N, N)
+        
+        # ---------- k truncation for lambda weights ----------
+        if self.k is not None and self.k < N:
+            in_topk = (pred_ranks <= self.k).float()  # (B, K)
+            topk_mask = in_topk.unsqueeze(-1) + in_topk.unsqueeze(-2)  # (B, K, K), at least one in top-k
+            topk_mask = (topk_mask > 0).float()
+            delta_ndcg = delta_ndcg * topk_mask
+        
+        # ---------- Pairwise loss ----------
+        pair_loss = torch.nn.functional.softplus(-self.sigma * score_diff)  # (B, N, N)
+        weighted_loss = delta_ndcg * pair_loss * pair_mask  # (B, N, N)
+        loss_per_query = weighted_loss.sum(dim=(-1, -2))  # (B,)
+        n_pairs = pair_mask.sum(dim=(-1, -2)).clamp(min=1.0)
+        loss_per_query = loss_per_query / n_pairs
+        
+        if self.reduction == "mean":
+            return loss_per_query.mean()
+        elif self.reduction == "sum":
+            return loss_per_query.sum()
+        else:
+            return loss_per_query

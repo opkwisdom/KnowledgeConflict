@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH=$PWD/src:$PYTHONPATH
 
@@ -38,6 +38,10 @@ CKPT_PATH="/workspaces/kvzip_nlplab/checkpoint/stage3_clf_only_train/multi_LR=2e
 # echo "Sleep for 13h 40m"
 # sleep 13h 40m
 
+
+CONFIG_BASE_PATH=config/src/run_inference.yaml
+CONFIG_HYBRID_PATH=config/src/run_hybrid_inference.yaml
+
 DATA_PATH=data/hotpotqa-w/retrieved/validation_p_top100_5000.jsonl
 # CKPT_PATH="/workspaces/kvzip_nlplab/checkpoint/stage3_clf_only_train/multi_LR=2e-05_fromST2_BS=16_Epochs=2_Pool=max_T1=0.5_Alpha=1.0_time=20260506-163449/multi-00-000957-valid_loss=3.7837.ckpt"
 CKPT_DIR="/workspaces/kvzip_nlplab/checkpoint/stage3_clf_only_train/multi_LR=2e-05_fromST2_BS=16_Epochs=2_Pool=max_T1=0.5_Alpha=1.0_time=20260510-074401"
@@ -50,10 +54,14 @@ USE_CAUSAL=False
 #     experiment_name=ablation_0.5_5000
 
 
-DATA_PATH=data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl
-torchrun --nproc_per_node=1 src/run_inference.py \
+# DATA_PATH=data/hotpotqa-w/retrieved/validation_1000r_p_top100.jsonl
+
+DATA_PATH=data/hotpotqa-w/retrieved/validation_top100_wo_gold.jsonl
+CKPT_DIR="/workspaces/kvzip_nlplab/checkpoint/stage3_clf_only_train/multi_LR=2e-05_fromST2_BS=16_Epochs=2_Pool=mean_Loss=listwise_T=1.0_Alpha=1.0_SYS=True_time=20260519-081123"
+
+torchrun --nproc_per_node=4 src/run_inference.py \
     --config config/src/run_inference.yaml \
     data.data_path=$DATA_PATH \
     caformer.ckpt_dir=$CKPT_DIR \
     caformer.use_causal=$USE_CAUSAL \
-    experiment_name=ablation_0.5_1000
+    experiment_name=sys_1.25

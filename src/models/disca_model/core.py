@@ -7,7 +7,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 from .load import load_model
 from src.prompt import GENERATE_PROMPT
-from utils import CtxExample, template
+from utils import CtxExample, template, apply_template
 from ..ca_former import CAFormerGGClassifier
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ class DISCA:
         # self.hidden_extraction_layers: List[int] = config.model.hidden_extraction_layers
         self.caformer_clf = caformer_clf.to(self.model.device)
         self.topk = config.data.topk_per_query
+        self.use_it = getattr(config.caformer, "use_it", True)
         self.__post_init__()
 
     def set_base_chat_template(self, task: str = "qa"):
@@ -88,13 +89,13 @@ class DISCA:
         )
         return decoded
     
-    def roberta_encode(self, text: Union[str, List[str]], return_tokens_only: bool = True, max_len: int = 256) -> Union[torch.Tensor, BatchEncoding]:
+    def roberta_encode(self, text: Union[str, List[str]], return_tokens_only: bool = True, max_len: int = 256, add_special_tokens: bool = False) -> Union[torch.Tensor, BatchEncoding]:
         if isinstance(text, str):
             text = [text]
         
         encoded = self.roberta_tokenizer(
             text,
-            add_special_tokens=False,
+            add_special_tokens=add_special_tokens,
             return_tensors="pt",
             padding=True,
             truncation=True,
@@ -105,7 +106,7 @@ class DISCA:
             return encoded.input_ids.to(self.device)
         return encoded
 
-    def build_inputs(
+    def build_inputs_for_rerank(
         self,
         queries: List[str],
         contexts_list: List[List[CtxExample]],
@@ -114,10 +115,10 @@ class DISCA:
         """
         Build batch inputs for the model.
         Returns:
-            - doc_ids: Tensor of shape (B, K, seq_len)
-            - doclen_tensor: Tensor of shape (B, K)
-            - source_ids: Tensor of shape (B * K, seq_len + query_len)
-            - source_mask: Tensor of shape (B * K, seq_len + query_len)
+            - doc_ids: Tensor of shape (B, N, seq_len)
+            - doclen_tensor: Tensor of shape (B, N)
+            - source_ids: Tensor of shape (B * N, seq_len + query_len)
+            - source_mask: Tensor of shape (B * N, seq_len + query_len)
             - question_ids: Tensor of shape (B, query_len)
             - question_mask: Tensor of shape (B, query_len)
             - roberta_question_ids: Tensor of shape (B, query_len) for CA-Former classifier
@@ -126,7 +127,7 @@ class DISCA:
         """
         # Construct input_ids with prompt template
         batch_query_texts = []    # (B,)
-        batch_doc_texts = []      # (B, K)
+        batch_doc_texts = []      # (B, N)
         source_texts = []
         # doclen_list = []
         for i, (q_text, ctx_list) in enumerate(zip(queries, contexts_list)):
@@ -136,35 +137,30 @@ class DISCA:
             # Generate source text
             for ctx in ctx_list:
                 doc_text = f"Title: {ctx.title}\n\n{ctx.text}"
-                source_text = f"{doc_text}{formatted_query_text}"
+                source_text = f"{doc_text}{formatted_query_text}" if not self.use_it \
+                            else apply_template(query_text, doc_text, self.model_name, task="qa", base_template=False)
                 batch_doc_texts.append(doc_text)
                 source_texts.append(source_text)
         
         B = len(batch_query_texts)
         doc_encoded = self.encode(batch_doc_texts, return_tokens_only=False, max_len=self.max_seq_length).to(self.device)
-        doc_ids = doc_encoded.input_ids.reshape(B, -1, doc_encoded.input_ids.size(-1))  # (B, K, seq_len)
-        doclen_tensor = doc_encoded.attention_mask.sum(dim=1).reshape(B, -1)  # (B, K)
+        doc_ids = doc_encoded.input_ids.reshape(B, -1, doc_encoded.input_ids.size(-1))  # (B, N, seq_len)
+        doclen_tensor = doc_encoded.attention_mask.sum(dim=1).reshape(B, -1)  # (B, N)
         source_encoded = self.encode(source_texts, return_tokens_only=False, max_len=self.max_seq_length + self.max_query_length).to(self.device)
         
         question_encoded = self.encode(queries, return_tokens_only=False, max_len=self.max_query_length).to(self.device)
         roberta_question_encoded = self.roberta_encode(queries, return_tokens_only=False, max_len=self.max_query_length).to(self.device)
 
         # Find the positions of PAD to get the length of each context
-        # if use_prompt:
-        #     sys_prompt_dummy = f"{self.sys_prompt_text}\n\n"
-        #     sys_prompt_len = len(self.tokenizer(sys_prompt_dummy, add_special_tokens=False).input_ids)
-        # else:
-        #     sys_prompt_len = 0
-
         encoded_dict = {
-            "doc_ids": doc_ids,                                                         # (B, K, seq_len)
-            "doclen_tensor": doclen_tensor,                                             # (B, K)
-            "source_ids": source_encoded.input_ids,                                     # (B*K, L_doc)
-            "source_mask": source_encoded.attention_mask,                     # (B*K, L_doc)
+            "doc_ids": doc_ids,                                                         # (B, N, seq_len)
+            "doclen_tensor": doclen_tensor,                                             # (B, N)
+            "source_ids": source_encoded.input_ids,                                     # (B*N, L_doc)
+            "source_mask": source_encoded.attention_mask,                               # (B*N, L_doc)
             "question_ids": question_encoded.input_ids,                                 # (B, L_query)
-            "question_mask": question_encoded.attention_mask,                 # (B, L_query)
+            "question_mask": question_encoded.attention_mask,                           # (B, L_query)
             "roberta_question_ids": roberta_question_encoded.input_ids,                 # (B, L_query)
-            "roberta_question_mask": roberta_question_encoded.attention_mask, # (B, L_query)
+            "roberta_question_mask": roberta_question_encoded.attention_mask,           # (B, L_query)
             "batch_query_texts": batch_query_texts,                                     # (B,)
         }
 
@@ -173,16 +169,16 @@ class DISCA:
     def rerank(self, inputs, scores_hat, topk):
         """
         Args:
-            scores_hat: Tensor of shape (B*K, 1)
+            scores_hat: Tensor of shape (B*N, 1)
         Returns:
             reranked_doc_ids: Tensor of shape (B, topk, seq_len)
             reranked_doclen_tensor: Tensor of shape (B, topk)
             reranked_scores_hat: Tensor of shape (B, topk)
         """
         B = inputs["question_ids"].shape[0]
-        K = inputs["source_ids"].shape[0] // B
+        N = inputs["source_ids"].shape[0] // B
 
-        scores_hat = scores_hat.reshape(B, K)
+        scores_hat = scores_hat.reshape(B, N)
 
         reranked_scores_hat, reranked_indices = torch.topk(scores_hat, k=topk, dim=1)   # (B, topk)
         seq_len = inputs["doc_ids"].size(-1)
@@ -226,6 +222,7 @@ class DISCA:
         
         inputs_ids_list = []
         seq_lengths = []
+
         for i in range(B):
             b_ids = []
             # System prompt (prefix)
@@ -234,7 +231,7 @@ class DISCA:
 
             for j in range(TOPK):
                 each_doclen = reranked_doclen_tensor[i, j]
-                each_doc_ids = reranked_doc_ids[i, j, -each_doclen:]    # Left-padding
+                each_doc_ids = reranked_doc_ids[i, j, -each_doclen:]
                 b_ids.append(each_doc_ids)
                 b_ids.append(newline_ids)  # Add newline between contexts
 
@@ -259,14 +256,10 @@ class DISCA:
         attention_mask = pad_sequence(attention_masks, batch_first=True, padding_side='left')   # (B, max_len)
         return inputs_ids, attention_mask
 
-    @torch.inference_mode()
-    def intervene(self, inputs: Dict[str, Any], use_prompt=True) -> Dict[str, Any]:
-        """
-        Intervene on the model's hidden states using CA-Former
-        """
+    def _compute_mg_scores(self, inputs: Dict[str, Any]) -> torch.Tensor:
         # Generate LLM hidden states for CA-Former input
         B = inputs["question_ids"].shape[0]
-        K = inputs["source_ids"].shape[0] // B
+        N = inputs["source_ids"].shape[0] // B
 
         llm_outputs = self.model.model(
             input_ids=inputs["source_ids"],
@@ -275,15 +268,44 @@ class DISCA:
             use_cache=False,
             return_dict=True
         )
-        llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*K, L, S, D_llm)
-        scores_hat, _ = self.caformer_clf(llm_repr, inputs["source_mask"],
-                                        inputs["roberta_question_ids"], inputs["roberta_question_mask"])  # (B*K, 1), (B*K, M, D_llm)
-        del llm_outputs, llm_repr     # Free up memory
+        llm_repr = torch.stack(llm_outputs.hidden_states[-12:]).permute(1, 0, 2, 3)   # (B*N, L, S, D_llm)
+        mg_scores, _ = self.caformer_clf(llm_repr, inputs["source_mask"],
+                                        inputs["roberta_question_ids"], inputs["roberta_question_mask"])  # (B*N, 1), (B*N, M, D_llm)
+        del llm_outputs, llm_repr
+        return mg_scores
+    
+    def compute_rerank_scores(
+        self,
+        inputs: Dict[str, Any],
+        queries: List[str],
+        contexts_list: List[List[CtxExample]],
+        mg_scores: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute final rerank scores
+        Hook for subclasses to inject fusion logic
+        """
+        return mg_scores
 
-        # Reranking
-        reranked_dict = self.rerank(inputs, scores_hat, self.topk)
+    @torch.inference_mode()
+    def intervene(
+        self,
+        inputs: Dict[str, Any],
+        queries: List[str],
+        contexts_list: List[List[CtxExample]],
+        use_prompt=True
+    ) -> Dict[str, Any]:
+        """
+        Intervene on the model's hidden states using CA-Former
+        """
+        # MG Scores estimation
+        mg_scores = self._compute_mg_scores(inputs)
 
-        # Make interleaving inputs for generation
+        # Final rerank scores
+        final_scores = self.compute_rerank_scores(inputs, queries, contexts_list, mg_scores)
+        
+        # Top-K reranking & Make final inputs for generation
+        reranked_dict = self.rerank(inputs, final_scores, self.topk)
         inputs_ids, attention_mask = self.make_inputs(inputs, reranked_dict, use_prompt)
 
         intervened_inputs = {
@@ -304,10 +326,10 @@ class DISCA:
         """
         if isinstance(queries, str):
             queries = [queries]
-
-        inputs = self.build_inputs(queries, contexts_list, use_prompt=True)
+        # Build CA-Former inputs
+        inputs = self.build_inputs_for_rerank(queries, contexts_list, use_prompt=True)
         if do_intervene:
-            inputs = self.intervene(inputs, use_prompt=True)
+            inputs = self.intervene(inputs, queries, contexts_list, use_prompt=True)
         else:
             inputs = {
                 "input_ids": inputs["input_ids"],

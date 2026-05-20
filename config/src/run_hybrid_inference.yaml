@@ -26,7 +26,7 @@ caformer:
   query_length: 32      # BLIP-2 default setting
   llm_width:    # Post initialized
 
-  pooling_strategy: mean
+  pooling_strategy: max
   dropout: 0.1
 
   use_linear_proj: True   # To embed as soft-prompt
@@ -34,19 +34,23 @@ caformer:
   # ckpt_path: /workspaces/kvzip_nlplab/checkpoint/stage3_clf_only_train/prev_exp/multi_LR=2e-05_fromST2_BS=2_ST=tanh_CMode=split_first_AMode=full_Pool=max_T=2.0_Alpha=1.0/multi-00-001531-valid_loss=0.2582.ckpt
 
   use_it: True
-
+  
   ### Stage-3
   classifier_mode: split_first   # [random, split_first, kmeans]
   classifier_query_length: 32
   attention_mode: full     # [full, block]
-  use_causal: False
+  use_causal: True
 
 seed: 42
 
 generate_prompt_name: base
-do_hybrid: False
+do_hybrid: True
 
 ### Reranking ensemble
+ce_reranker_path: BAAI/bge-reranker-base
+fusion_method: rrf
+fusion_weight: 0.5
+rrf_k: 60   # General RRF K value
 
 output_dir: /workspaces/kvzip_nlplab/DISCA/results/disca
 project_name: caformer

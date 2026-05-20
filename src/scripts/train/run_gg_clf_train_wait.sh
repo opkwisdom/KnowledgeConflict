@@ -22,8 +22,8 @@ USE_CAUSAL=False
 EPOCHS=2
 CKPT_DIR="/workspaces/kvzip_nlplab/checkpoint/stage2_recon_train/multi_LR=0.0001_BS=256_Scratch_Causal=False"
 
-echo "Sleep for 28 hours to wait reconstruction training..."
-sleep 28h
+# echo "Sleep for 28 hours to wait reconstruction training..."
+# sleep 28h
 python3 src/run_gg_clf_train.py \
       --config config/src/train/run_gg_clf_train.yaml \
       data.name=mhqa \
